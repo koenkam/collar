@@ -1,144 +1,243 @@
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
-from ibapi.contract import Contract
+from ibapi.contract import Contract, ContractDetails
 from ibapi.order import Order
 from ibapi.common import *
 import threading
 import time
+import inspect
 
 class IBApi(EWrapper, EClient):
-    def __init__(self, command_queue=None, data_queue=None):
+    def __init__(self, gui_to_ib=None, ib_to_gui=None):
         EClient.__init__(self, self)
         self.orders = []
         self.positions = []
         self.accounts = []
         self.account_summary = {}
-        self.command_queue = command_queue
-        self.data_queue = data_queue
+        self.gui_to_ib = gui_to_ib
+        self.ib_to_gui = ib_to_gui
         # Don't call start_api() in constructor
 
     def start_api(self):
         """Start the API connection and run the event loop"""
         try:
             # Start command processing thread if queue exists
-            if self.command_queue:
-                print("Starting command processing thread...")
+            if self.gui_to_ib:
                 self.command_thread = threading.Thread(target=self._process_commands, daemon=True)
                 self.command_thread.start()
             
-            print("Connecting to TWS...")
             self.connect("127.0.0.1", 7496, 0)
-            print("Starting run loop...")
             self.run()
         except Exception as e:
             print(f"Error connecting to TWS: {e}")
 
     def nextValidId(self, orderId: int):
-        self.orders.clear()
-        self.positions.clear()
-        self.account_summary.clear()
-        self.reqAllOpenOrders()
-        self.reqPositions()
-        # Don't automatically request managed accounts - wait for manual request
+        pass
 
     def _process_commands(self):
         """Process commands from the queue"""
         print("Command processing thread started")
         while True:
             try:
-                if not self.command_queue.empty():
-                    command = self.command_queue.get(timeout=1)
-                    print(f"Processing command: {command}")
-                    self._execute_command(command)
+                if not self.gui_to_ib.empty():
+                    self.command = self.gui_to_ib.get(timeout=1)
+                    print(f"Processing command: {self.command}")
+                    self._prepare_reqMktData()
+                    self._prepare_contractDetailsStock()
+                    self._prepare_contractDetailsOption()
+                    self._execute_command()
                 time.sleep(0.1)  # Small delay to prevent busy waiting
             except Exception as e:
                 print(f"Command processing error: {e}")
                 continue
 
-    def _execute_command(self, command):
-        """Execute a command received from the queue"""
-        if command == "get_orders":
-            self.reqAllOpenOrders()
-        elif command == "get_positions":
-            self.reqPositions()
-        elif command == "get_cash":
-            self.get_cash()
-        elif command == "get_account_summary":
-            self.get_account_summary()
-        elif command == "get_accounts":
-            self.reqManagedAccts()
-        # Add more commands as needed
+    def _prepare_contractDetailsOption(self):
+        if self.command["method_name"] != "reqContractDetails":
+            return
+        if not "option" in self.command:
+            return
+        option = self.command["option"]
+        #self.command is defined as: {"method_name": "reqContractDetails", "option": {"symbol": "AAPL", "expiry": "20240920", "strike": 175, "right": "C"}, "reqId": 1}
+        #turn this into the signature for the reqContractDetails method
+        # reqContractDetails(self, reqId: int, contract: Contract)
+        contract = Contract()
+        contract.symbol = option.get("symbol", "")
+        contract.secType = "OPT"
+        contract.exchange = "SMART"
+        contract.currency = "USD"
+        contract.lastTradeDateOrContractMonth = option.get("lastTradeDateOrContractMonth", "")
+        contract.strike = option.get("strike", 0.0)
+        contract.right = option.get("right", "")
+        self.command["contract"] = contract
+        del self.command["option"]
 
-    def openOrder(self, orderId, contract, order, orderState):
-        self.orders.append((orderId, contract, order, orderState))
 
-    def position(self, account, contract, position, avgCost):
-        self.positions.append((account, contract, position, avgCost))
+    def _prepare_contractDetailsStock(self):
+        if self.command["method_name"] != "reqContractDetails":
+            return
+        if not "stock" in self.command:
+            return
+        #self.command is defined as: {"method_name": "reqContractDetails", "stock": "AAPL", "reqId": 1}
+        #turn this into the signature for the reqContractDetails method
+        # reqContractDetails(self, reqId: int, contract: Contract)
+        contract = Contract()
+        contract.symbol = self.command["stock"]
+        contract.secType = "STK"
+        contract.exchange = "SMART"
+        contract.currency = "USD"
+        self.command["contract"] = contract
+        del self.command["stock"]
 
-    def positionEnd(self):
-        if self.data_queue:
-            self.data_queue.put({"type": "positions", "data": self.positions.copy()})
+    def _prepare_reqMktData(self):
+        print(f"Preparing reqMktData: {self.command}")
+        if self.command["method_name"] != "reqMktData":
+            return
+        #self.command is defined as: {"method_name": "reqMktData", "conId": 123123123123, "reqId": 1}
+        #turn this into the signature for the reqMktData method
+        # reqMktData(self, reqId: TickerId, contract: Contract, genericTickList: str, snapshot: bool, regulatorySnapshot: bool, mktDataOptions: ListOfTagValue)
+        print(f"Preparing reqMktData: {self.command}")
+        if self.command["secType"] == "STK":
+            contract = Contract()
+            contract.conId = self.command["conId"]
+            contract.exchange = "SMART"
+            contract.secType = "STK"
+            contract.currency = "USD"
+            self.command["contract"] = contract
+
+            #add default values for the other parameters
+            self.command["genericTickList"] = "221"
+            self.command["snapshot"] = False
+            self.command["regulatorySnapshot"] = False
+            self.command["mktDataOptions"] = []
+        elif self.command["secType"] == "OPT":
+            contract = Contract()
+            contract.conId = self.command["conId"]
+            contract.exchange = "SMART"
+            contract.secType = "OPT"
+            contract.currency = "USD"
+            self.command["contract"] = contract
+            self.command["genericTickList"] = ""
+        self.command["snapshot"] = False
+        self.command["regulatorySnapshot"] = False
+        self.command["mktDataOptions"] = []
+        del self.command["secType"]
+        del self.command["conId"]
+
+    def _execute_command(self):
+        """Execute IB API commands - pure generic dispatcher"""
+        try:
+            method_name = self.command["method_name"]
+            # Remove method_name, pass the rest as kwargs
+            kwargs = {k: v for k, v in self.command.items() if k != "method_name"}
+            
+            if hasattr(self, method_name):
+                method = getattr(self, method_name)
+                print(f"Executing: {method_name} {kwargs}")
+                result = method(**kwargs)
+                print(result)
+                self.ib_to_gui.put({
+                    "type": "command_result", 
+                    "method": method_name,
+                    "result": result
+                })
+                
+        except Exception as e:
+            print(f"Error executing command {self.command}: {e}")
+            if self.ib_to_gui:
+                self.ib_to_gui.put({"type": "error", "data": str(e)})
+    
+    def auto_queue(func):
+        """Decorator to automatically send callback data to GUI queue"""
+        def wrapper(self, *args, **kwargs):
+            # Call the original function first (for any custom logic)
+            result = func(self, *args, **kwargs)
+            func_name = func.__name__
+            if func_name == "error":
+                return
+            sig = inspect.signature(func)
+            bound = sig.bind(self, *args, **kwargs)
+            bound.apply_defaults()
+            # Remove 'self' from the arguments
+            arg_dict = {k: v for k, v in bound.arguments.items() if k != 'self'}
+            self.ib_to_gui.put({
+                "type": func_name,
+                "args": args,
+                "kwargs": arg_dict
+            })
+            
+            return result
+        return wrapper
+
+    @auto_queue
+    def tickPrice(self, reqId: int, tickType: int, price: float, attrib):
+        print(f"Tick Price. ReqId: {reqId}, TickType: {tickType}, Price: {price}, Attrib: {attrib}")
+        return
+
+    @auto_queue
+    def tickSize(self, reqId: int, tickType: int, size: int):
+        return
+    
+    @auto_queue
+    def tickString(self, reqId: int, tickType: int, value: str):
+        return
+
+    @auto_queue
+    def tickGeneric(self, reqId: int, tickType: int, value: float):
+        return
+    
+    def contractDetails(self, reqId: int, contract: ContractDetails):
+        if contract.contract.secType == "STK":
+            kwargs = {
+                "reqId": reqId,
+                "secType": contract.contract.secType,
+                "conId": contract.contract.conId,
+            }
         else:
-            print("Current Positions:")
-            for pos in self.positions:
-                print(pos)
+            kwargs = {
+                "reqId": reqId,
+                "secType": contract.contract.secType,
+                "conId": contract.contract.conId,
+                "strike": contract.contract.strike,
+                "right": contract.contract.right,
+                "lastTradeDateOrContractMonth": contract.contract.lastTradeDateOrContractMonth,
+            }
+        args = kwargs.values()
 
-    def openOrderEnd(self):
-        if self.data_queue:
-            self.data_queue.put({"type": "orders", "data": self.orders.copy()})
-        else:
-            print("Current Orders:")
-            for ord in self.orders:
-                print(ord)
 
-    def managedAccounts(self, accountsList: str):
-        """Callback for managed accounts"""
-        self.accounts = [acc.strip() for acc in accountsList.split(",") if acc.strip()]
-        print(f"Managed accounts: {self.accounts}")
-        # Don't automatically request account summary - wait for manual request
-        if "U7255176" in self.accounts:
-            print("Found target account U7255176")
-        else:
-            print("Target account U7255176 not found in managed accounts")
+        self.ib_to_gui.put({
+            "type": "contractDetails",
+            "reqId": reqId,
+            "args": args,
+            "kwargs": kwargs
+        })
 
-    def get_cash(self):
-        """Request cash balance for account U7255176"""
-        group = "All"  # Use "All" instead of specific account
-        print(f"Requesting cash for group: '{group}'")
-        # Cancel any existing account summary requests first
-        self.cancelAccountSummary(9001)
-        self.reqAccountSummary(9001, group, "TotalCashValue,AvailableFunds,BuyingPower")
+    @auto_queue
+    def securityDefinitionOptionParameter(self, reqId: int, exchange: str, 
+                                    underlyingConId: int, tradingClass: str,
+                                    multiplier: str, expirations: set,
+                                    strikes: set):
+        """Handle option security definition parameters"""
+        """
+        print(f"Option params for reqId {reqId} on {exchange}:")
+        print(f"  Underlying conId: {underlyingConId}")
+        print(f"  Trading class: {tradingClass}")
+        print(f"  Multiplier: {multiplier}")
+        print(f"  Expirations: {sorted(list(expirations))}")
+        print(f"  Strikes count: {len(strikes)}")
+        """
+        # The auto_queue decorator will automatically send this data to GUI
+        return
 
-    def get_account_summary(self):
-        """Request account summary for account U7255176"""
-        group = "All"  # Use "All" instead of specific account
-        print(f"Requesting account summary for group: '{group}'")
-        # Cancel any existing account summary requests first
-        self.cancelAccountSummary(9002)
-        self.reqAccountSummary(9002, group, "NetLiquidation,TotalCashValue,AvailableFunds,BuyingPower,GrossPositionValue")
+    @auto_queue 
+    def securityDefinitionOptionParameterEnd(self, reqId: int):
+        """Called when all option parameter data has been received"""
+        print(f"Option parameter data complete for reqId {reqId}")
+        return
 
-    def accountSummary(self, reqId: int, account: str, tag: str, value: str, currency: str):
-        """Callback for account summary data"""
-        key = f"{account}_{tag}"
-        self.account_summary[key] = {"value": value, "currency": currency}
-        print(f"Account {account}: {tag} = {value} {currency}")
-
-    def accountSummaryEnd(self, reqId: int):
-        """Called when account summary is complete"""
-        print(f"Account summary end for reqId: {reqId}")
-        if self.data_queue:
-            if reqId == 9001:  # Cash request
-                cash_data = {k: v for k, v in self.account_summary.items() if "Cash" in k or "Funds" in k or "Power" in k}
-                self.data_queue.put({"type": "cash", "data": cash_data})
-            elif reqId == 9002:  # Full account summary
-                self.data_queue.put({"type": "account_summary", "data": self.account_summary.copy()})
-        else:
-            print("Account Summary Complete")
-            for key, data in self.account_summary.items():
-                print(f"{key}: {data['value']} {data['currency']}")
-
+    @auto_queue
     def error(self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson = ""):
-        """Handle errors from TWS"""
+        if reqId == -1:
+            return
         print(f"ERROR {reqId} {errorCode} {errorString}")
         if errorCode == 321 and reqId in [9001, 9002]:
             print("Account validation error - this might be due to incorrect account name")

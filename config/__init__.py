@@ -22,6 +22,15 @@ def path(c):
     c.project_root = find_project_root()
     return c
 
+def wheel(c):
+    c.stocks=[
+        'GOOGL',
+        'AMZN',
+        'NVDA',
+        'SHOP',
+        'AMD'
+    ]
+    return c
 
 def make_c():
     c = Stub()
@@ -30,6 +39,7 @@ def make_c():
     for f in [
             general,
             path,
+            wheel,
         ]:
         c = f(c)
     return c
