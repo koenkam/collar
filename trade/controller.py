@@ -12,7 +12,9 @@ class Controller:
 
     def process_incoming_data(self):
         while not self.mainframe.ib_to_gui.empty():
+            
             incoming_command = self.mainframe.ib_to_gui.get()
+
             if incoming_command["type"] in ['command_result']:
                 return
             try:
@@ -99,9 +101,9 @@ class Controller:
         }
         self.sendIbCommand(command)
 
+
     def getStockPrice(self):
         if self.conId is None:
-            print("conId is None, cannot request market data")
             return
         command = {
             "method_name": "reqMktData",
@@ -134,7 +136,7 @@ class Controller:
                 "conId": incoming_command["kwargs"]["conId"],
                 "secType": "OPT",
             }
-            print(f"sending command for option market data: {command}")
+
             self.sendIbCommand(command)
 
 
@@ -146,7 +148,6 @@ class Controller:
                 self.mainframe.txt_price.SetValue(f"{self.stockprice:.2f}")
             return
 
-        print(f"found request: {request}")
         #elif incoming_command["secType"] == "OPT":
         #    conId = incoming_command["kwargs"]["conId"]
         #    print(f"Option market data for conId {conId}: {incoming_command['kwargs']}")
@@ -169,8 +170,6 @@ class Controller:
                 self.expirations.append(expiration)
         self.expirations = sorted(self.expirations)
         self.strikes = sorted(incoming_command["kwargs"].get("strikes", []))
-        print(f"Filtered expirations: {self.expirations}")
-        print(f"Total strikes: {len(self.strikes)}")
 
         for expiration in self.expirations:
             for strike in self.strikes:

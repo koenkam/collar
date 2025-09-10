@@ -41,7 +41,6 @@ class IBApi(EWrapper, EClient):
             try:
                 if not self.gui_to_ib.empty():
                     self.command = self.gui_to_ib.get(timeout=1)
-                    print(f"Processing command: {self.command}")
                     self._prepare_reqMktData()
                     self._prepare_contractDetailsStock()
                     self._prepare_contractDetailsOption()
@@ -89,13 +88,12 @@ class IBApi(EWrapper, EClient):
         del self.command["stock"]
 
     def _prepare_reqMktData(self):
-        print(f"Preparing reqMktData: {self.command}")
+
         if self.command["method_name"] != "reqMktData":
             return
         #self.command is defined as: {"method_name": "reqMktData", "conId": 123123123123, "reqId": 1}
         #turn this into the signature for the reqMktData method
         # reqMktData(self, reqId: TickerId, contract: Contract, genericTickList: str, snapshot: bool, regulatorySnapshot: bool, mktDataOptions: ListOfTagValue)
-        print(f"Preparing reqMktData: {self.command}")
         if self.command["secType"] == "STK":
             contract = Contract()
             contract.conId = self.command["conId"]
@@ -116,7 +114,8 @@ class IBApi(EWrapper, EClient):
             contract.secType = "OPT"
             contract.currency = "USD"
             self.command["contract"] = contract
-            self.command["genericTickList"] = ""
+            # Request Greeks and implied volatility data
+            self.command["genericTickList"] = "106"  # Model option, Impl Vol, Gamma, Theta, Delta
         self.command["snapshot"] = False
         self.command["regulatorySnapshot"] = False
         self.command["mktDataOptions"] = []
@@ -132,9 +131,8 @@ class IBApi(EWrapper, EClient):
             
             if hasattr(self, method_name):
                 method = getattr(self, method_name)
-                print(f"Executing: {method_name} {kwargs}")
+                #print(f"Executing: {method_name} {kwargs}")
                 result = method(**kwargs)
-                print(result)
                 self.ib_to_gui.put({
                     "type": "command_result", 
                     "method": method_name,
@@ -170,7 +168,6 @@ class IBApi(EWrapper, EClient):
 
     @auto_queue
     def tickPrice(self, reqId: int, tickType: int, price: float, attrib):
-        print(f"Tick Price. ReqId: {reqId}, TickType: {tickType}, Price: {price}, Attrib: {attrib}")
         return
 
     @auto_queue
@@ -183,6 +180,17 @@ class IBApi(EWrapper, EClient):
 
     @auto_queue
     def tickGeneric(self, reqId: int, tickType: int, value: float):
+        return
+    
+    @auto_queue
+    def tickOptionComputation(self, reqId: int, tickType: int, tickAttrib: int,
+                            impliedVol: float, delta: float, optPrice: float, 
+                            pvDividend: float, gamma: float, vega: float, 
+                            theta: float, undPrice: float):
+        """Handle option Greeks and computed values"""
+        print(f"Option Computation. ReqId: {reqId}, TickType: {tickType}")
+        print(f"  Delta: {delta}, Gamma: {gamma}, Theta: {theta}, Vega: {vega}")
+        print(f"  ImpliedVol: {impliedVol}, OptPrice: {optPrice}, UndPrice: {undPrice}")
         return
     
     def contractDetails(self, reqId: int, contract: ContractDetails):
@@ -231,7 +239,6 @@ class IBApi(EWrapper, EClient):
     @auto_queue 
     def securityDefinitionOptionParameterEnd(self, reqId: int):
         """Called when all option parameter data has been received"""
-        print(f"Option parameter data complete for reqId {reqId}")
         return
 
     @auto_queue
