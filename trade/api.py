@@ -168,6 +168,8 @@ class IBApi(EWrapper, EClient):
 
     @auto_queue
     def tickPrice(self, reqId: int, tickType: int, price: float, attrib):
+        #if reqId != 2 and tickType == 4:  # LAST
+        #    print(f"Tick Price. ReqId: {reqId}, TickType: {tickType}, Price: {price}")
         return
 
     @auto_queue
@@ -244,6 +246,8 @@ class IBApi(EWrapper, EClient):
     @auto_queue
     def error(self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson = ""):
         if reqId == -1:
+            return
+        if errorCode in [200, 201, 202]:  # Generic IB errors
             return
         print(f"ERROR {reqId} {errorCode} {errorString}")
         if errorCode == 321 and reqId in [9001, 9002]:

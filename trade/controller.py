@@ -24,11 +24,22 @@ class Controller:
             #print(f"looking for request id: {incoming_request_id} {self.requests}")
             if incoming_request_id in self.requests:
                 command = self.requests[incoming_request_id]
-                method_name = command["method_name"]
-                #print(f"trying to handle method: {method_name}")
-                if hasattr(self, f"handle_{method_name}"):
-                    handler = getattr(self, f"handle_{method_name}")
+                command_type = incoming_command["type"]
+
+                if hasattr(self, f"handle_{command_type}"):
+                    handler = getattr(self, f"handle_{command_type}")
                     handler(incoming_command)
+                else:
+                    ignore_list = [
+                        "tickPrice",
+                        "tickSize",
+                        "tickGeneric",
+                        "tickString",
+                        "securityDefinitionOptionParameterEnd"
+                    ]
+                    if command_type in ignore_list:
+                        return
+                    print(f"No handler for method: {command_type}")
             
 
     def sendIbCommand(self, command):
@@ -117,7 +128,7 @@ class Controller:
         self.sendIbCommand(command)
     
 
-    def handle_reqContractDetails(self, incoming_command):
+    def handle_contractDetails(self, incoming_command):
         if incoming_command["kwargs"]["secType"] == "STK":
 
             self.conId = incoming_command["kwargs"]["conId"]
@@ -140,7 +151,8 @@ class Controller:
             self.sendIbCommand(command)
 
 
-    def handle_reqMktData(self, incoming_command):
+    def handle_tickPrice(self, incoming_command):
+        print(f'Handling tickPrice: {incoming_command["kwargs"]}')
         request = self.requests[incoming_command["kwargs"]["reqId"]]
         if "contract"  in request and request["contract"].secType == "STK":
             if "price" in incoming_command["kwargs"]:
@@ -156,10 +168,8 @@ class Controller:
         
 
 
-    def handle_reqSecDefOptParams(self, incoming_command):
-        if self.strikes or self.expirations:
-            return
-        #print(f"Handling reqSecDefOptParams: {incoming_command}")
+    def handle_securityDefinitionOptionParameter(self, incoming_command):
+        print(f"Handling reqSecDefOptParams: {incoming_command}")
         today = datetime.date.today()
         for expiration in incoming_command["kwargs"].get("expirations", []):
             max_weeks = int(self.mainframe.choice_weeks.GetStringSelection())
