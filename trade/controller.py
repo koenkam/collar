@@ -9,6 +9,7 @@ class Controller:
         self.reqId = 1
         self.requests = OrderedDict()  # Maintain order of requests
         self.conId = None
+        self.stats = {}
 
     def process_incoming_data(self):
         while not self.mainframe.ib_to_gui.empty():
@@ -49,6 +50,12 @@ class Controller:
         self.mainframe.gui_to_ib.put(newcommand)
         self.requests[self.reqId] = newcommand
         self.reqId += 1
+        if self.stats.get(command["method_name"]) is None:
+            self.stats[command["method_name"]] = 0
+        self.stats[command["method_name"]] += 1
+        if self.reqId % 100 == 0:
+            print(self.stats)
+
 
     def cancelStreams(self):
         new_requests = OrderedDict()
@@ -136,12 +143,14 @@ class Controller:
             self.getStockPrice()
             self.reqSecDefOptParams()
         elif incoming_command["kwargs"]["secType"] == "OPT":
-            self.options[incoming_command["kwargs"]["conId"]] = {
+            reqId = incoming_command["kwargs"]["reqId"]
+            self.options[reqId] = {
                 "symbol": self.stock,
                 "lastTradeDateOrContractMonth": incoming_command["kwargs"].get("lastTradeDateOrContractMonth", ""),
-                "strike": incoming_command["kwargs"].get("strike", 0.0),
+                "strike": int(incoming_command["kwargs"].get("strike", 0)),
                 "right": incoming_command["kwargs"].get("right", ""),
             }
+            self.renderGrid()
             command = {
                 "method_name": "reqMktData",
                 "conId": incoming_command["kwargs"]["conId"],
@@ -152,34 +161,43 @@ class Controller:
 
 
     def handle_tickPrice(self, incoming_command):
-        print(f'Handling tickPrice: {incoming_command["kwargs"]}')
         request = self.requests[incoming_command["kwargs"]["reqId"]]
         if "contract"  in request and request["contract"].secType == "STK":
             if "price" in incoming_command["kwargs"]:
                 self.stockprice = incoming_command["kwargs"]["price"]
                 self.mainframe.txt_price.SetValue(f"{self.stockprice:.2f}")
             return
-
-        #elif incoming_command["secType"] == "OPT":
-        #    conId = incoming_command["kwargs"]["conId"]
-        #    print(f"Option market data for conId {conId}: {incoming_command['kwargs']}")
-        #else:
-        #    print(f"Unknown secType in reqMktData: {incoming_command['kwargs']}") do i know if it is stock or option market data?
+        if incoming_command["kwargs"].get("tickType") == 4:  # LAST price
+            reqId = incoming_command["kwargs"]["reqId"]
+            if reqId not in self.options:
+                self.options[reqId] = {}
+            self.options[reqId]["lastPrice"] = incoming_command["kwargs"]["price"]
+            self.renderGrid()
         
-
+    def handle_tickOptionComputation(self, incoming_command):
+        reqId = incoming_command["kwargs"]["reqId"]
+        if reqId not in self.options:
+            self.options[reqId] = {}
+        self.options[reqId]["impliedVol"] = incoming_command["kwargs"].get("impliedVol", None)
+        self.options[reqId]["delta"] = incoming_command["kwargs"].get("delta", None)
+        self.options[reqId]["gamma"] = incoming_command["kwargs"].get("gamma", None)
+        self.options[reqId]["theta"] = incoming_command["kwargs"].get("theta", None)
+        self.options[reqId]["vega"] = incoming_command["kwargs"].get("vega", None)
+        self.options[reqId]["optPrice"] = incoming_command["kwargs"].get("optPrice", None)
+        self.mainframe.txt_price.SetValue(f"{self.stockprice:.2f} | Options: {len(self.options)}")
+        self.renderGrid()
 
     def handle_securityDefinitionOptionParameter(self, incoming_command):
-        print(f"Handling reqSecDefOptParams: {incoming_command}")
         today = datetime.date.today()
         for expiration in incoming_command["kwargs"].get("expirations", []):
             max_weeks = int(self.mainframe.choice_weeks.GetStringSelection())
             expiration_date = datetime.datetime.strptime(expiration, "%Y%m%d").date()
-            #calculate the difference in weeks between today and expiration_date
             delta_weeks = (expiration_date - today).days // 7
             if 0 < delta_weeks <= max_weeks:
                 self.expirations.append(expiration)
         self.expirations = sorted(self.expirations)
         self.strikes = sorted(incoming_command["kwargs"].get("strikes", []))
+        print(len(self.expirations) * len(self.strikes), "options found")
 
         for expiration in self.expirations:
             for strike in self.strikes:
@@ -195,3 +213,24 @@ class Controller:
                     }
                 }
                 self.sendIbCommand(command)
+
+    def renderGrid(self):
+        grid = self.mainframe.grid
+        grid.ClearGrid()
+        row = 0
+        for reqId, option in self.options.items():
+            if row >= grid.GetNumberRows():
+                grid.AppendRows(1)
+            grid.SetCellValue(row, 0, option.get("lastTradeDateOrContractMonth", ""))
+            grid.SetCellValue(row, 1, f"{option.get('strike', 0.0):.2f}")
+            grid.SetCellValue(row, 2, option.get("right", ""))
+            grid.SetCellValue(row, 3, f"{option.get('delta', 0.0):.4f}" if option.get('delta') is not None else "")
+            grid.SetCellValue(row, 4, f"{option.get('optPrice', 0.0):.2f}" if option.get('optPrice') is not None else "")
+            grid.SetCellValue(row, 5, f"{option.get('impliedVol', 0.0):.2%}" if option.get('impliedVol') is not None else "")
+            if self.stockprice and option.get('optPrice') is not None:
+                ppd = self.stockprice - option['strike'] + option['optPrice'] if option['right'] == 'P' else option['strike'] - self.stockprice + option['optPrice']
+                grid.SetCellValue(row, 6, f"{ppd:.2f}")
+                roi = (ppd / (option['strike'] * 100)) * 52 if option['strike'] > 0 else 0
+                grid.SetCellValue(row, 7, f"{roi:.2%}")
+            row += 1
+        grid.AutoSizeColumns()

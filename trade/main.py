@@ -40,8 +40,7 @@ class MainFrame(wx.Frame):
 
     def render_picker(self):
         hbox1 = wx.BoxSizer(wx.HORIZONTAL)
-        self.txt_stock = wx.TextCtrl(self.panel, value=c.stocks[0] if c.stocks else "")
-        print(self.txt_stock.GetValue())
+        self.txt_stock = wx.TextCtrl(self.panel, value=c.stocks[0] if c.stocks else "", style=wx.TE_RIGHT)
         hbox1.Add(self.txt_stock, flag=wx.RIGHT, border=8)
         self.choice = wx.Choice(self.panel, choices=c.stocks)
         hbox1.Add(self.choice, flag=wx.RIGHT, border=8)
