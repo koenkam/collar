@@ -30,6 +30,10 @@ def wheel(c):
         'SHOP',
         'AMD'
     ]
+    c.default_exchange = 'CBOE'
+    c.strike_threshold = 0.9  # 5%
+    c.delta_min = -0.3
+    c.delta_max = -0.2
     return c
 
 def make_c():

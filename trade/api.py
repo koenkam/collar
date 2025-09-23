@@ -7,7 +7,9 @@ import threading
 import time
 import inspect
 
+
 class IBApi(EWrapper, EClient):
+
     def __init__(self, gui_to_ib=None, ib_to_gui=None):
         EClient.__init__(self, self)
         self.orders = []
@@ -49,6 +51,9 @@ class IBApi(EWrapper, EClient):
             except Exception as e:
                 print(f"Command processing error: {e}")
                 continue
+
+    def reqPositions(self, *args, **kwargs):
+        super().reqPositions()
 
     def _prepare_contractDetailsOption(self):
         if self.command["method_name"] != "reqContractDetails":
@@ -189,10 +194,6 @@ class IBApi(EWrapper, EClient):
                             impliedVol: float, delta: float, optPrice: float, 
                             pvDividend: float, gamma: float, vega: float, 
                             theta: float, undPrice: float):
-        """Handle option Greeks and computed values"""
-        print(f"Option Computation. ReqId: {reqId}, TickType: {tickType}")
-        print(f"  Delta: {delta}, Gamma: {gamma}, Theta: {theta}, Vega: {vega}")
-        print(f"  ImpliedVol: {impliedVol}, OptPrice: {optPrice}, UndPrice: {undPrice}")
         return
     
     def contractDetails(self, reqId: int, contract: ContractDetails):
@@ -243,18 +244,38 @@ class IBApi(EWrapper, EClient):
         """Called when all option parameter data has been received"""
         return
 
+
     @auto_queue
-    def error(self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson = ""):
+    def position(self, account: str, contract: Contract, position: float, avgCost: float):
+        print(f"Position received: {contract.symbol} - {position} @ {avgCost}")
+        # Store positions in self.positions
+        self.positions.append({
+            "account": account,
+            "symbol": contract.symbol,
+            "secType": contract.secType,
+            "position": position,
+            "avgCost": avgCost
+        })
+        return
+        return
+
+    @auto_queue
+    def positionEnd(self):
+        return
+
+
+
+    def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=''):
         if reqId == -1:
             return
-        if errorCode in [200, 201, 202]:  # Generic IB errors
+        if errorCode in [-1, 200, 201, 202]:  # Generic IB errors
             return
-        print(f"ERROR {reqId} {errorCode} {errorString}")
+        print(f"ERROR {reqId} {reqId==-1} {errorCode} {errorString}")
         if errorCode == 321 and reqId in [9001, 9002]:
             print("Account validation error - this might be due to incorrect account name")
             print(f"Available accounts: {self.accounts}")
             # Send error to data queue so UI can display it
-            if self.data_queue:
+            if hasattr(self, "data_queue") and self.data_queue:
                 self.data_queue.put({"type": "error", "data": f"Error {errorCode}: {errorString}"})
 
-
+   

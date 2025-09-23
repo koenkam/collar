@@ -9,11 +9,11 @@ c=create_c()
 
 
 class MainFrame(wx.Frame):
-    def __init__(self, parent, title, gui_to_ib, ib_to_gui):
-        super().__init__(parent, title=title, size=(900, 800))
-        self.controller = Controller(self)
-        self.gui_to_ib = gui_to_ib
-        self.ib_to_gui = ib_to_gui
+
+    def __init__(self, controller):
+        super().__init__(None, title="The Collar", size=(900, 800))
+        self.controller = controller
+        self.controller.mainframe = self  # Set the mainframe reference in controller
         self.init_ui()
         
         # Timer to check for incoming data
@@ -25,12 +25,7 @@ class MainFrame(wx.Frame):
         self.panel = wx.Panel(self)
         self.vbox = wx.BoxSizer(wx.VERTICAL)
         
-        """
-        make a dropdown with the stocks in c.stocks
-        the behavior should be: the dropdown shows the stocks in c.stocks
-        when a stock is selected, it is shown in the text box next to it
-        there is a load button next to the text box
-        """
+        self.render_portfolio()
         self.render_picker()
         self.render_dash()
         self.render_grid()
@@ -38,9 +33,28 @@ class MainFrame(wx.Frame):
         self.Centre()
         self.controller.getStock(self.txt_stock.GetValue()  )
 
+    def render_portfolio(self):
+        #draw a title "Portfolio" at the top of the window
+        hbox0 = wx.BoxSizer(wx.HORIZONTAL)
+        lbl_portfolio = wx.StaticText(self.panel, label='Portfolio')
+        hbox0.Add(lbl_portfolio, flag=wx.RIGHT, border=8)
+        #draw a grid that displays the portfolio
+        #columns are: Symbol, N, PX, Last, pl, PPD, ROI
+        labels = ["Symbol", "N", "PX", "Last", "PL", "PPD", "ROI"]
+        self.grid_portfolio = wx.grid.Grid(self.panel)
+        self.grid_portfolio.CreateGrid(5, len(labels))
+        for col, label in enumerate(labels):
+            self.grid_portfolio.SetColLabelValue(col, label)
+        self.grid_portfolio.AutoSizeColumns()
+        self.vbox.Add(hbox0, flag=wx.EXPAND|wx.LEFT|wx.RIGHT|wx.TOP, border=10)
+        self.vbox.Add(self.grid_portfolio, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
+        #add a button "
+
+
     def render_picker(self):
         hbox1 = wx.BoxSizer(wx.HORIZONTAL)
-        self.txt_stock = wx.TextCtrl(self.panel, value=c.stocks[0] if c.stocks else "", style=wx.TE_RIGHT)
+        self.txt_stock = wx.TextCtrl(self.panel, value=c.stocks[0] if c.stocks else "")
+        print(self.txt_stock.GetValue())
         hbox1.Add(self.txt_stock, flag=wx.RIGHT, border=8)
         self.choice = wx.Choice(self.panel, choices=c.stocks)
         hbox1.Add(self.choice, flag=wx.RIGHT, border=8)
@@ -71,7 +85,7 @@ class MainFrame(wx.Frame):
     def render_grid(self):
         #i want to make an excel-like grid with 10 rows and 5 columns
         self.grid = wx.grid.Grid(self.panel)  # Use wx.grid.Grid instead of wx.Grid
-        labels = ["Expiration", "Strike", "Type", "Delta", "Mid", "IV","PPD", "ROI"]
+        labels = ["Expiration", "Strike", "Type", "Last", "Δ", "IV","PPD", "ROI"]
         self.grid.CreateGrid(10, len(labels))
         self.vbox.Add(self.grid, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
         
@@ -79,6 +93,16 @@ class MainFrame(wx.Frame):
             self.grid.SetColLabelValue(col, label)
         self.grid.AutoSizeColumns()
 
+    def resetGrid(self):
+        """Reset grid to empty state"""
+        self.grid.ClearGrid()
+        
+        # Only delete rows if there are rows to delete
+        num_rows = self.grid.GetNumberRows()
+        if num_rows > 0:
+            self.grid.DeleteRows(0, num_rows)
+        
+        self.grid.ForceRefresh()
 
     def on_stock_selected(self, event):
         selected_stock = self.choice.GetStringSelection()
@@ -86,13 +110,8 @@ class MainFrame(wx.Frame):
 
     def on_load(self, event):
         stock = self.txt_stock.GetValue()
-        print("on load:", stock)
         if stock:
             self.controller.getStock(stock)
 
     def on_timer(self, event):
-        """Check for incoming data from IB API"""
-        while not self.ib_to_gui.empty():
-            self.controller.process_incoming_data()
-
-
+        self.controller.process_incoming_data()

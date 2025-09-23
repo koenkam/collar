@@ -1,17 +1,21 @@
 import wx
 import threading
-import queue
 import sys
+import time
 from trade.api import IBApi
 from trade.main import MainFrame
+from trade.controller import Controller
+import queue
+
 
 def main():
     # Create queues for communication
     gui_to_ib = queue.Queue()
     ib_to_gui = queue.Queue()
-    
-    # Create IBApi instance but don't start yet
+    controller = Controller(gui_to_ib, ib_to_gui)
     ib_api = IBApi(gui_to_ib, ib_to_gui)
+
+    
 
     # Start IBApi in completely separate thread
     def run_ib_api():
@@ -22,10 +26,12 @@ def main():
     
     ib_thread = threading.Thread(target=run_ib_api, daemon=True)
     ib_thread.start()
+
+    
     
     app = wx.App(False)
     
-    frame = MainFrame(None, "IB TWS Client", gui_to_ib, ib_to_gui)
+    frame = MainFrame(controller)
     
     frame.Center()
     
@@ -37,7 +43,7 @@ def main():
         frame.RequestUserAttention(wx.USER_ATTENTION_ERROR)
     
     app.SetTopWindow(frame)
-    
+    controller.reqPositions()
     app.MainLoop()
 
 if __name__ == "__main__":
