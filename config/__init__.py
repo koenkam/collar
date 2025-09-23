@@ -18,6 +18,11 @@ def find_project_root(start_path=None):
             raise FileNotFoundError("No .git directory found in any parent folder.")
         current = parent
 
+def gui(c):
+    c.portfolio_labels =  ["Expiration", "Strike", "Type", "Delta", "Mid", "IV","PPD", "ROI"]
+    c.options_labels =  ["Expiration", "Strike", "Type", "Delta", "Mid", "IV","PPD", "ROI"]
+    return c
+
 def path(c):
     c.project_root = find_project_root()
     return c
@@ -40,6 +45,7 @@ def make_c():
             general,
             path,
             wheel,
+            gui
         ]:
         c = f(c)
     return c

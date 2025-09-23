@@ -24,13 +24,6 @@ class MainFrame(wx.Frame):
     def init_ui(self):
         self.panel = wx.Panel(self)
         self.vbox = wx.BoxSizer(wx.VERTICAL)
-        
-        """
-        make a dropdown with the stocks in c.stocks
-        the behavior should be: the dropdown shows the stocks in c.stocks
-        when a stock is selected, it is shown in the text box next to it
-        there is a load button next to the text box
-        """
         self.render_picker()
         self.render_dash()
         self.render_grid()
@@ -47,12 +40,8 @@ class MainFrame(wx.Frame):
         self.btn_load = wx.Button(self.panel, label='Load')
         hbox1.Add(self.btn_load)
         self.vbox.Add(hbox1, flag=wx.EXPAND|wx.LEFT|wx.RIGHT|wx.TOP, border=10)
-        # Bind the dropdown selection event
         self.choice.Bind(wx.EVT_CHOICE, self.on_stock_selected)
         self.btn_load.Bind(wx.EVT_BUTTON, self.on_load)
-
-        #add a dropdown for the number of weeks to show, default: 2 weeks, options: 1 to 10
-        #give it some horizontal space with the previous widget and show a label "weeks"
         hbox1.Add((20, 0))
         lbl_weeks = wx.StaticText(self.panel, label='Weeks:')
         hbox1.Add(lbl_weeks, flag=wx.RIGHT, border=8)
@@ -69,9 +58,8 @@ class MainFrame(wx.Frame):
         self.vbox.Add(hbox2, flag=wx.EXPAND|wx.LEFT|wx.RIGHT|wx.TOP, border=10)
 
     def render_grid(self):
-        #i want to make an excel-like grid with 10 rows and 5 columns
-        self.grid = wx.grid.Grid(self.panel)  # Use wx.grid.Grid instead of wx.Grid
-        labels = ["Expiration", "Strike", "Type", "Delta", "Mid", "IV","PPD", "ROI"]
+        self.grid = wx.grid.Grid(self.panel)  
+        labels = c.options_labels
         self.grid.CreateGrid(10, len(labels))
         self.vbox.Add(self.grid, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
         
