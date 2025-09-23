@@ -83,7 +83,6 @@ class Controller:
             self.sendIbCommand(cancel_command)
 
     def reqPositions(self):
-        print("Requesting positions")
         command = {
             "method_name": "reqPositions"
         }
@@ -154,7 +153,6 @@ class Controller:
     
 
     def handle_contractDetails(self):
-        print(self.incoming_command)
         getattr(self, f"handle_contractDetails_{self.incoming_command['kwargs']['secType']}")()
            
            
@@ -230,7 +228,6 @@ class Controller:
     def handle_securityDefinitionOptionParameter(self):
         if self.incoming_command["kwargs"].get("exchange", "") != c.default_exchange:
             return
-        print(self.incoming_command["kwargs"].get("strikes", []))
         option_type = "P"
         today = datetime.date.today()
         for expiration in self.incoming_command["kwargs"].get("expirations", []):
@@ -241,7 +238,6 @@ class Controller:
                 self.expirations.append(expiration)
         self.expirations = sorted(self.expirations, reverse=False)
         self.strikes = sorted(self.incoming_command["kwargs"].get("strikes", []), reverse=True)
-        print(len(self.expirations) * len(self.strikes), "options found")
 
         for expiration in self.expirations:
             for strike in self.strikes:
@@ -323,7 +319,6 @@ class Controller:
         symbol = contract.symbol
         secType = contract.secType
         
-        print(f"Position: {symbol} ({secType}) - {position} shares @ {avgCost:.2f}")
         
         # Store in portfolio data structure
         if not hasattr(self, 'portfolio'):
@@ -343,8 +338,6 @@ class Controller:
         self.updatePortfolioDisplay()
 
     def handle_positionEnd(self):
-        """Handle end of position updates"""
-        print("Position updates complete")
         # Final GUI update or summary calculations
         self.finalizePortfolioDisplay()
 
@@ -365,10 +358,18 @@ class Controller:
             grid.DeleteRows(0, current_rows - required_rows)
         
         for row, item in enumerate(portfolio_items):
+            print(item["contract"])
+            if item.get('secType') == 'OPT':
+                opttype = 'PUT' if item['contract'].right == 'P' else 'CALL'
+                optexpire = item['contract'].lastTradeDateOrContractMonth
+            else:
+                opttype = item['secType']
+                optexpire = ""
             grid.SetCellValue(row, 0, item.get("symbol", ""))
-            grid.SetCellValue(row, 1, f"{int(item.get('position', 0.0))}")            
-            grid.SetCellValue(row, 2, item.get("secType", ""))
-            grid.SetCellValue(row, 3, f"{item.get('avgCost', 0.0):.2f}")
+            grid.SetCellValue(row, 1, f"{int(item.get('position', 0.0))}")
+            grid.SetCellValue(row, 2, opttype)
+            grid.SetCellValue(row, 3, optexpire)
+            grid.SetCellValue(row, 4, f"{item.get('avgCost', 0.0):.2f}")
             
         
         grid.AutoSizeColumns()

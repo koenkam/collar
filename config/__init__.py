@@ -19,7 +19,7 @@ def find_project_root(start_path=None):
         current = parent
 
 def gui(c):
-    c.portfolio_labels =  ["Symbol", "N", "Type", "PX", "Last", "PL", "PPD", "ROI"]
+    c.portfolio_labels =  ["Symbol", "N", "Type", "Expire", "AvgPX", "Last", "PL", "PPD", "ROI"]
     c.options_labels =  ["Expiration", "Strike", "Type", "Delta", "Mid", "IV","PPD", "ROI"]
     return c
 
