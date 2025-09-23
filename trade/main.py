@@ -37,18 +37,15 @@ class MainFrame(wx.Frame):
         #draw a title "Portfolio" at the top of the window
         hbox0 = wx.BoxSizer(wx.HORIZONTAL)
         lbl_portfolio = wx.StaticText(self.panel, label='Portfolio')
-        hbox0.Add(lbl_portfolio, flag=wx.RIGHT, border=8)
-        #draw a grid that displays the portfolio
-        #columns are: Symbol, N, PX, Last, pl, PPD, ROI
-        labels = ["Symbol", "N", "PX", "Last", "PL", "PPD", "ROI"]
+        hbox0.Add(lbl_portfolio, flag=wx.RIGHT, border=8)        
         self.grid_portfolio = wx.grid.Grid(self.panel)
-        self.grid_portfolio.CreateGrid(5, len(labels))
-        for col, label in enumerate(labels):
+        self.grid_portfolio.CreateGrid(5, len(c.portfolio_labels))
+        for col, label in enumerate(c.portfolio_labels):
             self.grid_portfolio.SetColLabelValue(col, label)
         self.grid_portfolio.AutoSizeColumns()
         self.vbox.Add(hbox0, flag=wx.EXPAND|wx.LEFT|wx.RIGHT|wx.TOP, border=10)
         self.vbox.Add(self.grid_portfolio, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
-        #add a button "
+
 
 
     def render_picker(self):
@@ -61,12 +58,8 @@ class MainFrame(wx.Frame):
         self.btn_load = wx.Button(self.panel, label='Load')
         hbox1.Add(self.btn_load)
         self.vbox.Add(hbox1, flag=wx.EXPAND|wx.LEFT|wx.RIGHT|wx.TOP, border=10)
-        # Bind the dropdown selection event
         self.choice.Bind(wx.EVT_CHOICE, self.on_stock_selected)
         self.btn_load.Bind(wx.EVT_BUTTON, self.on_load)
-
-        #add a dropdown for the number of weeks to show, default: 2 weeks, options: 1 to 10
-        #give it some horizontal space with the previous widget and show a label "weeks"
         hbox1.Add((20, 0))
         lbl_weeks = wx.StaticText(self.panel, label='Weeks:')
         hbox1.Add(lbl_weeks, flag=wx.RIGHT, border=8)
@@ -83,9 +76,8 @@ class MainFrame(wx.Frame):
         self.vbox.Add(hbox2, flag=wx.EXPAND|wx.LEFT|wx.RIGHT|wx.TOP, border=10)
 
     def render_grid(self):
-        #i want to make an excel-like grid with 10 rows and 5 columns
-        self.grid = wx.grid.Grid(self.panel)  # Use wx.grid.Grid instead of wx.Grid
-        labels = ["Expiration", "Strike", "Type", "Last", "Δ", "IV","PPD", "ROI"]
+        self.grid = wx.grid.Grid(self.panel)  
+        labels = c.options_labels
         self.grid.CreateGrid(10, len(labels))
         self.vbox.Add(self.grid, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
         

@@ -227,16 +227,6 @@ class IBApi(EWrapper, EClient):
                                     underlyingConId: int, tradingClass: str,
                                     multiplier: str, expirations: set,
                                     strikes: set):
-        """Handle option security definition parameters"""
-        """
-        print(f"Option params for reqId {reqId} on {exchange}:")
-        print(f"  Underlying conId: {underlyingConId}")
-        print(f"  Trading class: {tradingClass}")
-        print(f"  Multiplier: {multiplier}")
-        print(f"  Expirations: {sorted(list(expirations))}")
-        print(f"  Strikes count: {len(strikes)}")
-        """
-        # The auto_queue decorator will automatically send this data to GUI
         return
 
     @auto_queue 
@@ -247,7 +237,6 @@ class IBApi(EWrapper, EClient):
 
     @auto_queue
     def position(self, account: str, contract: Contract, position: float, avgCost: float):
-        print(f"Position received: {contract.symbol} - {position} @ {avgCost}")
         # Store positions in self.positions
         self.positions.append({
             "account": account,

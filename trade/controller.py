@@ -365,11 +365,11 @@ class Controller:
             grid.DeleteRows(0, current_rows - required_rows)
         
         for row, item in enumerate(portfolio_items):
-            grid.SetCellValue(row, 0, item.get("account", ""))
-            grid.SetCellValue(row, 1, item.get("symbol", ""))
+            grid.SetCellValue(row, 0, item.get("symbol", ""))
+            grid.SetCellValue(row, 1, f"{int(item.get('position', 0.0))}")            
             grid.SetCellValue(row, 2, item.get("secType", ""))
-            grid.SetCellValue(row, 3, f"{item.get('position', 0.0):.2f}")
-            grid.SetCellValue(row, 4, f"{item.get('avgCost', 0.0):.2f}")
+            grid.SetCellValue(row, 3, f"{item.get('avgCost', 0.0):.2f}")
+            
         
         grid.AutoSizeColumns()
 
