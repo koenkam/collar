@@ -43,18 +43,21 @@ class IBApi(EWrapper, EClient):
             try:
                 if not self.gui_to_ib.empty():
                     self.command = self.gui_to_ib.get(timeout=1)
-                    self._prepare_reqMktData()
-                    self._prepare_contractDetailsStock()
-                    self._prepare_contractDetailsOption()
+                    #self._prepare_reqMktData()
+                    #self._prepare_contractDetailsStock()
+                    #self._prepare_contractDetailsOption()
                     self._execute_command()
                 time.sleep(0.1)  # Small delay to prevent busy waiting
             except Exception as e:
-                print(f"Command processing error: {e}")
+                contract = self.command.get("contract", None) if hasattr(self, 'command') and self.command else None
+                sec_type = contract.secType if contract and hasattr(contract, 'secType') else None
+                print(f"Command processing error: {e} {getattr(self, 'command', None)} {sec_type}")
                 continue
 
     def reqPositions(self, *args, **kwargs):
         super().reqPositions()
 
+    """
     def _prepare_contractDetailsOption(self):
         if self.command["method_name"] != "reqContractDetails":
             return
@@ -92,6 +95,7 @@ class IBApi(EWrapper, EClient):
         self.command["contract"] = contract
         del self.command["stock"]
 
+    
     def _prepare_reqMktData(self):
 
         if self.command["method_name"] != "reqMktData":
@@ -126,7 +130,8 @@ class IBApi(EWrapper, EClient):
         self.command["mktDataOptions"] = []
         del self.command["secType"]
         del self.command["conId"]
-
+    """
+        
     def _execute_command(self):
         """Execute IB API commands - pure generic dispatcher"""
         try:

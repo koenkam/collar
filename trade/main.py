@@ -26,12 +26,10 @@ class MainFrame(wx.Frame):
         self.vbox = wx.BoxSizer(wx.VERTICAL)
         
         self.render_portfolio()
-        self.render_picker()
-        self.render_dash()
-        self.render_grid()
+        #self.render_dash()
         self.panel.SetSizer(self.vbox)
         self.Centre()
-        self.controller.getStock(self.txt_stock.GetValue()  )
+        #self.controller.getStock(self.txt_stock.GetValue()  )
 
     def render_portfolio(self):
         #draw a title "Portfolio" at the top of the window
@@ -42,59 +40,19 @@ class MainFrame(wx.Frame):
         self.grid_portfolio.CreateGrid(5, len(c.portfolio_labels))
         for col, label in enumerate(c.portfolio_labels):
             self.grid_portfolio.SetColLabelValue(col, label)
+        # align all columns to the right
+        for col, label in enumerate(c.portfolio_labels):
+            if label in c.portfolio_columns_left:
+                attr = wx.grid.GridCellAttr()
+                attr.SetAlignment(wx.ALIGN_LEFT, wx.ALIGN_CENTER)
+                self.grid_portfolio.SetColAttr(col, attr)
+            else:
+                self.grid_portfolio.SetColFormatNumber(col)
         self.grid_portfolio.AutoSizeColumns()
         self.vbox.Add(hbox0, flag=wx.EXPAND|wx.LEFT|wx.RIGHT|wx.TOP, border=10)
         self.vbox.Add(self.grid_portfolio, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
 
 
-
-    def render_picker(self):
-        hbox1 = wx.BoxSizer(wx.HORIZONTAL)
-        self.txt_stock = wx.TextCtrl(self.panel, value=c.stocks[0] if c.stocks else "")
-        print(self.txt_stock.GetValue())
-        hbox1.Add(self.txt_stock, flag=wx.RIGHT, border=8)
-        self.choice = wx.Choice(self.panel, choices=c.stocks)
-        hbox1.Add(self.choice, flag=wx.RIGHT, border=8)
-        self.btn_load = wx.Button(self.panel, label='Load')
-        hbox1.Add(self.btn_load)
-        self.vbox.Add(hbox1, flag=wx.EXPAND|wx.LEFT|wx.RIGHT|wx.TOP, border=10)
-        self.choice.Bind(wx.EVT_CHOICE, self.on_stock_selected)
-        self.btn_load.Bind(wx.EVT_BUTTON, self.on_load)
-        hbox1.Add((20, 0))
-        lbl_weeks = wx.StaticText(self.panel, label='Weeks:')
-        hbox1.Add(lbl_weeks, flag=wx.RIGHT, border=8)
-        self.choice_weeks = wx.Choice(self.panel, choices=[str(i) for i in range(1, 11)])
-        self.choice_weeks.SetStringSelection("2")  # Set default to 2 weeks
-        hbox1.Add(self.choice_weeks, flag=wx.RIGHT, border=8)
-
-    def render_dash(self):
-        hbox2 = wx.BoxSizer(wx.HORIZONTAL)
-        lbl_price = wx.StaticText(self.panel, label='Price:')
-        hbox2.Add(lbl_price, flag=wx.RIGHT, border=8)
-        self.txt_price = wx.TextCtrl(self.panel)
-        hbox2.Add(self.txt_price, flag=wx.RIGHT, border=8)
-        self.vbox.Add(hbox2, flag=wx.EXPAND|wx.LEFT|wx.RIGHT|wx.TOP, border=10)
-
-    def render_grid(self):
-        self.grid = wx.grid.Grid(self.panel)  
-        labels = c.options_labels
-        self.grid.CreateGrid(10, len(labels))
-        self.vbox.Add(self.grid, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
-        
-        for col, label in enumerate(labels):
-            self.grid.SetColLabelValue(col, label)
-        self.grid.AutoSizeColumns()
-
-    def resetGrid(self):
-        """Reset grid to empty state"""
-        self.grid.ClearGrid()
-        
-        # Only delete rows if there are rows to delete
-        num_rows = self.grid.GetNumberRows()
-        if num_rows > 0:
-            self.grid.DeleteRows(0, num_rows)
-        
-        self.grid.ForceRefresh()
 
     def on_stock_selected(self, event):
         selected_stock = self.choice.GetStringSelection()

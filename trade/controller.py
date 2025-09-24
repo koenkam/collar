@@ -5,15 +5,48 @@ import datetime
 from config import create_c
 #from experiments import option
 c = create_c()
+from .firestore import FirestoreDB
 
 class Controller:
     def __init__(self, gui_to_ib, ib_to_gui):
         self.ib_to_gui = ib_to_gui
         self.gui_to_ib = gui_to_ib
+        self.firestore = FirestoreDB(self)
+        self.firestore.get_portfolio()
         self.reqId = 1
         self.requests = OrderedDict()  # Maintain order of requests
         self.conId = None
         self.stats = {}
+        self.lastprice = {}
+        self.portfolio_gui_map = {}
+
+    def get_instrument_id_from_contract(self, contract):
+        
+        finstrument_key_list =  [
+            contract.lastTradeDateOrContractMonth if contract.secType == 'OPT' else 'STK',
+            contract.symbol
+        ]
+        if contract.secType == 'OPT':
+            finstrument_key_list += [
+                contract.strike,
+                contract.right
+            ]
+        instrument_key = "_".join(map(str, finstrument_key_list))
+        return instrument_key
+    
+    def get_instrument_id_from_portfolio(self, positionkey):
+        self.position = self.portfolio[positionkey]
+        contract = self.position["contract"]
+        return self.get_instrument_id_from_contract(contract)
+
+    def get_instrument_id_from_request(self, reqId):
+        request = self.requests[reqId]
+        contract = request.get("contract", None)
+        if contract is None:
+            return ""
+        return self.get_instrument_id_from_contract(contract)
+
+
 
     def process_incoming_data(self):
         while not self.ib_to_gui.empty():
@@ -88,103 +121,6 @@ class Controller:
         }
         self.sendIbCommand(command)
 
-    def getStock(self, stock=""):
-        #first cancel all other stock price streams
-        #send command to ibapi to cancel all other streams
-        self.cancelStreams()
-        self.mainframe.resetGrid()
-        self.optionKeyToRow = {}
-        
-        if stock != "":
-            self.stock = stock
-        else:
-            self.stock = self.mainframe.txt_stock.GetValue()
-        if stock == "":
-            return
-        self.getContractDetails()
-
-    def getStockContractDict(self):
-        contractDict = {
-            "symbol": self.stock,
-            "secType": "STK",
-            "exchange": "SMART",
-            "currency": "USD"
-        }
-        return contractDict
-
-
-    #for the stock, get the list of expiration dates for the options
-    def reqSecDefOptParams(self):
-        command = {
-            "method_name": "reqSecDefOptParams",
-            "underlyingSymbol": self.stock,
-            "futFopExchange": "",
-            "underlyingSecType": "STK",
-            "underlyingConId": self.conId if self.conId is not None else 0
-        }
-        self.sendIbCommand(command)
-        self.strikes = []
-        self.expirations = []
-        self.options = {}
-
-
-
-    def getContractDetails(self):
-        command = {
-            "method_name": "reqContractDetails",
-            "stock": self.stock
-        }
-        self.sendIbCommand(command)
-
-
-    def getStockPrice(self):
-        if self.conId is None:
-            return
-        command = {
-            "method_name": "reqMktData",
-            "secType": "STK",
-            "conId": self.conId,
-        }
-        self.sendIbCommand(command)
-
-    def cancelMktData(self, reqId):
-        command = self._serialize_command("cancelMktData", reqId=reqId)
-        self.sendIbCommand(command)
-    
-
-    def handle_contractDetails(self):
-        getattr(self, f"handle_contractDetails_{self.incoming_command['kwargs']['secType']}")()
-           
-           
-    def handle_contractDetails_STK(self):
-        self.conId = self.incoming_command["kwargs"]["conId"]
-        self.requests[self.incoming_command["reqId"]]["conId"] = self.conId
-        self.getStockPrice()
-        self.reqSecDefOptParams()
-
-    def handle_contractDetails_OPT(self):
-        conId = self.incoming_command["kwargs"]["conId"]
-        optionKey = self.incoming_command["kwargs"].get("lastTradeDateOrContractMonth")
-        optionKey += "_" + str(self.incoming_command["kwargs"].get("strike"))
-        optionKey += "_" + self.incoming_command["kwargs"].get("right")
-        optionData = {
-            "symbol": self.stock,
-            "lastTradeDateOrContractMonth": self.incoming_command["kwargs"].get("lastTradeDateOrContractMonth", ""),
-            "strike": self.incoming_command["kwargs"].get("strike", 0),
-            "right": self.incoming_command["kwargs"].get("right", ""),
-            "conId": conId,
-            "optionKey": optionKey
-        }
-        self.options[optionKey] = optionData
-        self.renderGrid()
-        command = {
-            "method_name": "reqMktData",
-            "conId": conId,
-            "secType": "OPT",
-        }
-        self.sendIbCommand(command, extra=optionData)
-
-
 
     def tickPriceIsOptionPrice(self):
         reqId = self.incoming_command["kwargs"]["reqId"]
@@ -193,23 +129,29 @@ class Controller:
         return False
 
     def handle_tickPrice(self):
+        instrument_id = self.get_instrument_id_from_request(self.incoming_command["kwargs"]["reqId"])
         request = self.requests[self.incoming_command["kwargs"]["reqId"]]
+        price = None
         if "contract"  in request and request["contract"].secType == "STK":
             if "price" in self.incoming_command["kwargs"]:
-                self.stockprice = self.incoming_command["kwargs"]["price"]
-                self.mainframe.txt_price.SetValue(f"{self.stockprice:.2f}")
+                price = self.incoming_command["kwargs"]["price"]
+                if self.mainframe.txt_stock.GetValue() == request["contract"].symbol:
+                    self.stockprice = price
+                    self.mainframe.txt_price.SetValue(f"{self.stockprice:.2f}")
+                self.lastprice[instrument_id] = price
             return
         if self.incoming_command["kwargs"].get("tickType") == 4:  # LAST price
+            price = self.incoming_command["kwargs"]["price"]
             if self.tickPriceIsOptionPrice():
                 reqId = self.incoming_command["kwargs"]["reqId"]
                 request = self.requests[reqId]
                 optionKey = request["optionKey"]
-                self.options[optionKey]["lastPrice"] = self.incoming_command["kwargs"]["price"]
+                self.options[optionKey]["lastPrice"] = price
                 self.renderGrid()
             else:
-                self.stockprice = self.incoming_command["kwargs"]["price"]
+                self.stockprice = price
                 self.mainframe.txt_price.SetValue(f"{self.stockprice:.2f}")
-            
+            self.lastprice[instrument_id] = price            
         
     def handle_tickOptionComputation(self):
         reqId = self.incoming_command["kwargs"]["reqId"]
@@ -274,7 +216,9 @@ class Controller:
                 return True
             if self.iter_option[property] is None:
                 return True
-        if self.iter_option("delta") is not None and (self.iter_option["delta"] < c.delta_min or self.iter_option["delta"] > c.delta_max):
+        if self.iter_option["delta"] is not None \
+            and (self.iter_option["delta"] < c.delta_min \
+                or self.iter_option["delta"] > c.delta_max):
             return True
         return False
 
@@ -324,30 +268,40 @@ class Controller:
         if not hasattr(self, 'portfolio'):
             self.portfolio = {}
         
-        position_key = f"{account}_{symbol}_{secType}"
+        position_key = self.get_instrument_id_from_contract(contract)
         self.portfolio[position_key] = {
             "account": account,
             "symbol": symbol,
             "secType": secType,
             "position": position,
             "avgCost": avgCost,
-            "contract": contract
+            "contract": contract,
+            "premium": None,
+            "startdate": None
         }
+
+        self.firestore.merge_portfolio_item(position_key)
         
         # Update GUI portfolio display
         self.updatePortfolioDisplay()
+
+        #now request the price of this instrument
+        command = {
+            "method_name": "reqMktData",
+            "contract": contract,
+        }
+        self.sendIbCommand(command)
+
 
     def handle_positionEnd(self):
         # Final GUI update or summary calculations
         self.finalizePortfolioDisplay()
 
     def updatePortfolioDisplay(self):
-        """Update the portfolio display in the GUI"""
         if not hasattr(self, 'portfolio'):
             return
         portfolio_items = list(self.portfolio.values())
         grid = self.mainframe.grid_portfolio
-        grid.ClearGrid()
         
         # Ensure enough rows
         current_rows = grid.GetNumberRows()
@@ -357,23 +311,35 @@ class Controller:
         elif required_rows < current_rows:
             grid.DeleteRows(0, current_rows - required_rows)
         
-        for row, item in enumerate(portfolio_items):
-            print(item["contract"])
-            if item.get('secType') == 'OPT':
-                opttype = 'PUT' if item['contract'].right == 'P' else 'CALL'
-                optexpire = item['contract'].lastTradeDateOrContractMonth
+        for instrument_id, position in self.portfolio.items():
+            print("INSTRUMENT ID", instrument_id, self.portfolio_gui_map)
+            if instrument_id in self.portfolio_gui_map:
+                row = self.portfolio_gui_map[instrument_id]
             else:
-                opttype = item['secType']
+                row = max(self.portfolio_gui_map.values(), default=-1) + 1
+                self.portfolio_gui_map[instrument_id] = row
+            if position.get('secType') == 'OPT':
+                opttype = 'PUT' if position['contract'].right == 'P' else 'CALL'
+                optexpire = position['contract'].lastTradeDateOrContractMonth
+            else:
+                opttype = position['secType']
                 optexpire = ""
-            grid.SetCellValue(row, 0, item.get("symbol", ""))
-            grid.SetCellValue(row, 1, f"{int(item.get('position', 0.0))}")
-            grid.SetCellValue(row, 2, opttype)
-            grid.SetCellValue(row, 3, optexpire)
-            grid.SetCellValue(row, 4, f"{item.get('avgCost', 0.0):.2f}")
-            
-        
+            col = 0
+            print("ROW", row, position)
+            grid.SetCellValue(row, col, position.get("symbol", ""))
+            col += 1
+            grid.SetCellValue(row, col, f"{int(position.get('position', 0.0))}")
+            col += 1
+            grid.SetCellValue(row, col, opttype)
+            col += 1
+            grid.SetCellValue(row, col, position.get('startdate', ''))
+            col += 1
+            grid.SetCellValue(row, col , optexpire)
+            col += 1
+            grid.SetCellValue(row, col, f"{position.get('premium', 0.0):.2f}")
         grid.AutoSizeColumns()
 
     def finalizePortfolioDisplay(self):
         """Final portfolio display update"""
         pass
+
