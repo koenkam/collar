@@ -6,6 +6,7 @@ from config import create_c
 #from experiments import option
 c = create_c()
 from .firestore import FirestoreDB
+from util import Stub
 
 class Controller:
     def __init__(self, gui_to_ib, ib_to_gui):
@@ -34,10 +35,6 @@ class Controller:
         instrument_key = "_".join(map(str, finstrument_key_list))
         return instrument_key
     
-    def get_instrument_id_from_portfolio(self, positionkey):
-        self.position = self.portfolio[positionkey]
-        contract = self.position["contract"]
-        return self.get_instrument_id_from_contract(contract)
 
     def get_instrument_id_from_request(self, reqId):
         request = self.requests[reqId]
@@ -122,50 +119,33 @@ class Controller:
         self.sendIbCommand(command)
 
 
-    def tickPriceIsOptionPrice(self):
-        reqId = self.incoming_command["kwargs"]["reqId"]
-        if "strike" in self.requests[reqId]:
-            return True
-        return False
-
     def handle_tickPrice(self):
         instrument_id = self.get_instrument_id_from_request(self.incoming_command["kwargs"]["reqId"])
         request = self.requests[self.incoming_command["kwargs"]["reqId"]]
-        price = None
-        if "contract"  in request and request["contract"].secType == "STK":
+        contract = request.get("contract", None)
+        if contract.secType == "STK":
             if "price" in self.incoming_command["kwargs"]:
                 price = self.incoming_command["kwargs"]["price"]
-                if self.mainframe.txt_stock.GetValue() == request["contract"].symbol:
-                    self.stockprice = price
-                    self.mainframe.txt_price.SetValue(f"{self.stockprice:.2f}")
-                self.lastprice[instrument_id] = price
+                self.portfolio[instrument_id].lastPrice = price
+                self.portfolio[instrument_id].dirty = True
             return
         if self.incoming_command["kwargs"].get("tickType") == 4:  # LAST price
             price = self.incoming_command["kwargs"]["price"]
-            if self.tickPriceIsOptionPrice():
-                reqId = self.incoming_command["kwargs"]["reqId"]
-                request = self.requests[reqId]
-                optionKey = request["optionKey"]
-                self.options[optionKey]["lastPrice"] = price
-                self.renderGrid()
-            else:
-                self.stockprice = price
-                self.mainframe.txt_price.SetValue(f"{self.stockprice:.2f}")
-            self.lastprice[instrument_id] = price            
-        
+            self.portfolio[instrument_id].lastPrice = price
+            self.portfolio[instrument_id].dirty = True
+
     def handle_tickOptionComputation(self):
         reqId = self.incoming_command["kwargs"]["reqId"]
-        optionKey = self.requests[reqId].get("optionKey", None)
-        
-        if optionKey not in self.options:
-            self.options[optionKey] = {}
-        self.options[optionKey]["impliedVol"] = self.incoming_command["kwargs"].get("impliedVol", None)
-        self.options[optionKey]["delta"] = self.incoming_command["kwargs"].get("delta", None)
-        self.options[optionKey]["gamma"] = self.incoming_command["kwargs"].get("gamma", None)
-        self.options[optionKey]["theta"] = self.incoming_command["kwargs"].get("theta", None)
-        self.options[optionKey]["vega"] = self.incoming_command["kwargs"].get("vega", None)
-        self.options[optionKey]["optPrice"] = self.incoming_command["kwargs"].get("optPrice", None)
-        self.renderGrid()
+        instrument_id = self.get_instrument_id_from_request(reqId)
+
+        self.portfolio[instrument_id].impliedVol = self.incoming_command["kwargs"].get("impliedVol", None)
+        self.portfolio[instrument_id].delta = self.incoming_command["kwargs"].get("delta", None)
+        self.portfolio[instrument_id].gamma = self.incoming_command["kwargs"].get("gamma", None)
+        self.portfolio[instrument_id].theta = self.incoming_command["kwargs"].get("theta", None)
+        self.portfolio[instrument_id].vega = self.incoming_command["kwargs"].get("vega", None)
+        self.portfolio[instrument_id].optPrice = self.incoming_command["kwargs"].get("optPrice", None)
+        self.portfolio[instrument_id].dirty = True
+
 
     def handle_securityDefinitionOptionParameter(self):
         if self.incoming_command["kwargs"].get("exchange", "") != c.default_exchange:
@@ -228,6 +208,7 @@ class Controller:
         self.iter_option["PPD"] = (self.iter_option["lastPrice"])/days_to_expiration
         self.iter_option["ROI"] = (self.iter_option["PPD"]*365)/(self.iter_option["strike"]) * 100
 
+    """
     def renderGrid(self):
         grid = self.mainframe.grid
         for optionKey, self.iter_option in self.options.items():
@@ -252,6 +233,7 @@ class Controller:
             grid.SetCellValue(row, 7, f"{self.iter_option.get('ROI'):.2%}" if self.iter_option.get('ROI') is not None else "")
             row += 1
         grid.AutoSizeColumns()
+    """
 
     def handle_position(self):
         """Handle individual position updates"""
@@ -260,35 +242,34 @@ class Controller:
         position = self.incoming_command["kwargs"].get("position", 0.0)
         avgCost = self.incoming_command["kwargs"].get("avgCost", 0.0)
         
-        symbol = contract.symbol
-        secType = contract.secType
-        
         
         # Store in portfolio data structure
         if not hasattr(self, 'portfolio'):
             self.portfolio = {}
         
-        position_key = self.get_instrument_id_from_contract(contract)
-        self.portfolio[position_key] = {
-            "account": account,
-            "symbol": symbol,
-            "secType": secType,
-            "position": position,
-            "avgCost": avgCost,
-            "contract": contract,
-            "premium": None,
-            "startdate": None
-        }
-
-        self.firestore.merge_portfolio_item(position_key)
+        instrument_id = self.get_instrument_id_from_contract(contract)
+        self.portfolio[instrument_id] = Stub(
+            account=account,
+            n=position,
+            avgCost=avgCost,
+            contract=contract,
+            premium=None,
+            startdate=None,
+            dirty=True
+        )
+        self.firestore.merge_portfolio_item(instrument_id)
         
         # Update GUI portfolio display
         self.updatePortfolioDisplay()
 
-        #now request the price of this instrument
+        contract.exchange = c.default_exchange
         command = {
             "method_name": "reqMktData",
             "contract": contract,
+            "genericTickList": "",
+            "snapshot": False,
+            "regulatorySnapshot": False,
+            "mktDataOptions": []
         }
         self.sendIbCommand(command)
 
@@ -298,45 +279,51 @@ class Controller:
         self.finalizePortfolioDisplay()
 
     def updatePortfolioDisplay(self):
-        if not hasattr(self, 'portfolio'):
-            return
-        portfolio_items = list(self.portfolio.values())
         grid = self.mainframe.grid_portfolio
         
         # Ensure enough rows
         current_rows = grid.GetNumberRows()
-        required_rows = len(portfolio_items)
+        required_rows = len(self.portfolio.items())
         if required_rows > current_rows:
             grid.AppendRows(required_rows - current_rows)
         elif required_rows < current_rows:
             grid.DeleteRows(0, current_rows - required_rows)
         
         for instrument_id, position in self.portfolio.items():
-            print("INSTRUMENT ID", instrument_id, self.portfolio_gui_map)
+            if not position.dirty:
+                pass
+                #return
+            position.dirty = False
+            contract = position.contract
             if instrument_id in self.portfolio_gui_map:
                 row = self.portfolio_gui_map[instrument_id]
             else:
                 row = max(self.portfolio_gui_map.values(), default=-1) + 1
                 self.portfolio_gui_map[instrument_id] = row
-            if position.get('secType') == 'OPT':
-                opttype = 'PUT' if position['contract'].right == 'P' else 'CALL'
-                optexpire = position['contract'].lastTradeDateOrContractMonth
+            if contract.secType == 'OPT':
+                opttype = 'PUT' if contract.right == 'P' else 'CALL'
+                optexpire = contract.lastTradeDateOrContractMonth
             else:
-                opttype = position['secType']
+                opttype = contract.secType
                 optexpire = ""
+            
+            startdate = position.startdate if hasattr(position, 'startdate') else ""
+            lastPrice = f"{position.lastPrice}" if hasattr(position, 'lastPrice') else ""
+            premium = f"{position.premium:.2f}" if hasattr(position, 'premium') else "0.00"
             col = 0
-            print("ROW", row, position)
-            grid.SetCellValue(row, col, position.get("symbol", ""))
+            grid.SetCellValue(row, col, contract.symbol)
             col += 1
-            grid.SetCellValue(row, col, f"{int(position.get('position', 0.0))}")
+            grid.SetCellValue(row, col, f"{position.n}")
             col += 1
             grid.SetCellValue(row, col, opttype)
             col += 1
-            grid.SetCellValue(row, col, position.get('startdate', ''))
+            grid.SetCellValue(row, col, f"{startdate}")
             col += 1
             grid.SetCellValue(row, col , optexpire)
             col += 1
-            grid.SetCellValue(row, col, f"{position.get('premium', 0.0):.2f}")
+            grid.SetCellValue(row, col, premium)
+            col += 1
+            grid.SetCellValue(row, col, lastPrice)
         grid.AutoSizeColumns()
 
     def finalizePortfolioDisplay(self):
