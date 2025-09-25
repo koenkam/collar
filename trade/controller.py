@@ -18,7 +18,7 @@ class Controller:
         self.requests = OrderedDict()  # Maintain order of requests
         self.conId = None
         self.stats = {}
-        self.lastprice = {}
+        self.portfolio = {}
         self.portfolio_gui_map = {}
 
     def get_instrument_id_from_contract(self, contract):
@@ -118,26 +118,46 @@ class Controller:
         }
         self.sendIbCommand(command)
 
+    def find_underlying_for_stocktick(self, symbol):
+        for instrument_id, position in self.portfolio.items():
+            contract = position.contract
+            if contract.secType == 'OPT' and contract.symbol == symbol:
+                return instrument_id
+        return None
 
-    def handle_tickPrice(self):
+    def handle_tickPrice(self):        
         instrument_id = self.get_instrument_id_from_request(self.incoming_command["kwargs"]["reqId"])
         request = self.requests[self.incoming_command["kwargs"]["reqId"]]
         contract = request.get("contract", None)
         if contract.secType == "STK":
+            if instrument_id not in self.portfolio:
+                underlying_instrument_id = self.find_underlying_for_stocktick(contract.symbol)
+                if underlying_instrument_id is not None \
+                        and "price" in self.incoming_command["kwargs"]:
+                    self.portfolio[underlying_instrument_id].underlyingPrice = self.incoming_command["kwargs"]["price"]
+                    self.portfolio[underlying_instrument_id].dirty = True
+                    self.updatePortfolioDisplay()
+                    return
+                
             if "price" in self.incoming_command["kwargs"]:
                 price = self.incoming_command["kwargs"]["price"]
                 self.portfolio[instrument_id].lastPrice = price
                 self.portfolio[instrument_id].dirty = True
+                self.updatePortfolioDisplay()
             return
-        if self.incoming_command["kwargs"].get("tickType") == 4:  # LAST price
+        #if contract.conId == 808931954:  # AMD
+        #    print("AMD tickPrice", self.incoming_command)
+        if self.incoming_command["kwargs"].get("tickType") in (1,2,4): 
             price = self.incoming_command["kwargs"]["price"]
             self.portfolio[instrument_id].lastPrice = price
             self.portfolio[instrument_id].dirty = True
+            print(contract.symbol, price)
+            self.updatePortfolioDisplay()
 
     def handle_tickOptionComputation(self):
         reqId = self.incoming_command["kwargs"]["reqId"]
         instrument_id = self.get_instrument_id_from_request(reqId)
-
+        contract = self.requests[reqId].get("contract", None)
         self.portfolio[instrument_id].impliedVol = self.incoming_command["kwargs"].get("impliedVol", None)
         self.portfolio[instrument_id].delta = self.incoming_command["kwargs"].get("delta", None)
         self.portfolio[instrument_id].gamma = self.incoming_command["kwargs"].get("gamma", None)
@@ -145,112 +165,19 @@ class Controller:
         self.portfolio[instrument_id].vega = self.incoming_command["kwargs"].get("vega", None)
         self.portfolio[instrument_id].optPrice = self.incoming_command["kwargs"].get("optPrice", None)
         self.portfolio[instrument_id].dirty = True
-
-
-    def handle_securityDefinitionOptionParameter(self):
-        if self.incoming_command["kwargs"].get("exchange", "") != c.default_exchange:
-            return
-        option_type = "P"
-        today = datetime.date.today()
-        for expiration in self.incoming_command["kwargs"].get("expirations", []):
-            max_weeks = int(self.mainframe.choice_weeks.GetStringSelection())
-            expiration_date = datetime.datetime.strptime(expiration, "%Y%m%d").date()
-            delta_weeks = (expiration_date - today).days // 7
-            if 0 < delta_weeks <= max_weeks:
-                self.expirations.append(expiration)
-        self.expirations = sorted(self.expirations, reverse=False)
-        self.strikes = sorted(self.incoming_command["kwargs"].get("strikes", []), reverse=True)
-
-        for expiration in self.expirations:
-            for strike in self.strikes:
-                
-                command = {
-                    "method_name": "reqContractDetails",
-                    "option": {
-                        "symbol": self.stock,
-                        "lastTradeDateOrContractMonth": expiration,
-                        "strike": strike,
-                        "right": option_type,
-
-                    }
-                }
-                self.sendIbCommand(command)
-
-    def cleanGridRow(self, optionKey):
-        if optionKey in self.optionKeyToRow:
-            #remove the row from the grid
-            oldrow = self.optionKeyToRow[optionKey]
-            del self.optionKeyToRow[optionKey]
-            for row_optionKey, row in list(self.optionKeyToRow.items()):
-                if row > oldrow:
-                    self.optionKeyToRow[row_optionKey] = row - 1
-            #delete the row from the grid
-            if self.mainframe.grid.GetNumberRows() > 0:
-                self.mainframe.grid.DeleteRows(oldrow, 1)
-
-    def filterOption(self):
-        if self.iter_option["strike"] > self.stockprice and self.iter_option["right"] == "P":
-            return True
-        for property in ["impliedVol", "delta", "lastPrice"]:
-            if property not in self.iter_option:
-                return True
-            if self.iter_option[property] is None:
-                return True
-        if self.iter_option["delta"] is not None \
-            and (self.iter_option["delta"] < c.delta_min \
-                or self.iter_option["delta"] > c.delta_max):
-            return True
-        return False
-
-    def calculateNew(self):
-        expiration_date = datetime.datetime.strptime(self.iter_option["lastTradeDateOrContractMonth"], "%Y%m%d").date()
-        days_to_expiration = (expiration_date - datetime.date.today()).days + 1
-        self.iter_option["PPD"] = (self.iter_option["lastPrice"])/days_to_expiration
-        self.iter_option["ROI"] = (self.iter_option["PPD"]*365)/(self.iter_option["strike"]) * 100
-
-    """
-    def renderGrid(self):
-        grid = self.mainframe.grid
-        for optionKey, self.iter_option in self.options.items():
-            if self.filterOption():
-                self.cleanGridRow(optionKey)
-                continue
-            if optionKey not in self.optionKeyToRow:
-                grid.AppendRows(1)
-                row = grid.GetNumberRows() - 1
-                self.optionKeyToRow[optionKey] = row
-                grid.SetCellValue(row, 0, self.iter_option.get("lastTradeDateOrContractMonth", ""))
-                grid.SetCellValue(row, 1, f"{self.iter_option.get('strike', 0.0):.2f}")
-                grid.SetCellValue(row, 2, self.iter_option.get("right", ""))
-            else:
-                row = self.optionKeyToRow[optionKey]
-            #labels = ["Expiration", "Strike", "Type", "Last", "Δ", "IV","PPD", "ROI"]
-            last_price = self.iter_option.get('lastPrice')
-            grid.SetCellValue(row, 3, f"{last_price:.4f}" if last_price is not None else "")
-            grid.SetCellValue(row, 4, f"{self.iter_option.get('delta'):.2f}" if self.iter_option.get('delta') is not None else "")
-            grid.SetCellValue(row, 5, f"{self.iter_option.get('impliedVol'):.2%}" if self.iter_option.get('impliedVol') is not None else "")
-            grid.SetCellValue(row, 6, f"{self.iter_option.get('PPD'):.2f}" if self.iter_option.get('PPD') is not None else "")
-            grid.SetCellValue(row, 7, f"{self.iter_option.get('ROI'):.2%}" if self.iter_option.get('ROI') is not None else "")
-            row += 1
-        grid.AutoSizeColumns()
-    """
+        self.updatePortfolioDisplay()
 
     def handle_position(self):
         """Handle individual position updates"""
         account = self.incoming_command["kwargs"].get("account", "")
         contract = self.incoming_command["kwargs"].get("contract", {})
-        position = self.incoming_command["kwargs"].get("position", 0.0)
+        n = self.incoming_command["kwargs"].get("position", 0.0)
         avgCost = self.incoming_command["kwargs"].get("avgCost", 0.0)
-        
-        
-        # Store in portfolio data structure
-        if not hasattr(self, 'portfolio'):
-            self.portfolio = {}
         
         instrument_id = self.get_instrument_id_from_contract(contract)
         self.portfolio[instrument_id] = Stub(
             account=account,
-            n=position,
+            n=n,
             avgCost=avgCost,
             contract=contract,
             premium=None,
@@ -271,7 +198,25 @@ class Controller:
             "regulatorySnapshot": False,
             "mktDataOptions": []
         }
+        print(f"Requesting market data for {contract.symbol} {contract.secType} {contract.strike} {contract.right} {contract.lastTradeDateOrContractMonth} {contract.conId}")
         self.sendIbCommand(command)
+        #when i receive an option position (and the option contract), i wish to retrieve the 
+        #price of the underlying stock
+        if contract.secType == "OPT":
+            stock_contract = Contract()
+            stock_contract.symbol = contract.symbol
+            stock_contract.secType = "STK"
+            stock_contract.currency = contract.currency
+            stock_contract.exchange = c.default_exchange
+            stock_command = {
+                "method_name": "reqMktData",
+                "contract": stock_contract,
+                "genericTickList": "",
+                "snapshot": False,
+                "regulatorySnapshot": False,
+                "mktDataOptions": []
+            }
+            self.sendIbCommand(stock_command)
 
 
     def handle_positionEnd(self):
@@ -308,23 +253,85 @@ class Controller:
                 optexpire = ""
             
             startdate = position.startdate if hasattr(position, 'startdate') else ""
-            lastPrice = f"{position.lastPrice}" if hasattr(position, 'lastPrice') else ""
-            premium = f"{position.premium:.2f}" if hasattr(position, 'premium') else "0.00"
-            col = 0
-            grid.SetCellValue(row, col, contract.symbol)
-            col += 1
-            grid.SetCellValue(row, col, f"{position.n}")
-            col += 1
-            grid.SetCellValue(row, col, opttype)
-            col += 1
-            grid.SetCellValue(row, col, f"{startdate}")
-            col += 1
-            grid.SetCellValue(row, col , optexpire)
-            col += 1
-            grid.SetCellValue(row, col, premium)
-            col += 1
-            grid.SetCellValue(row, col, lastPrice)
+            lastPrice = position.lastPrice if hasattr(position, 'lastPrice') and position.lastPrice is not None and position.lastPrice >= 0 else 0.0
+            buyback = lastPrice * position.n * 100
+            premium = position.premium if hasattr(position, 'premium') \
+                and position.premium is not None else 0.0
+            pl = premium + buyback if buyback > 0 else 0.0
+            if contract.secType == 'OPT' and startdate:
+                expiry_date = datetime.datetime.strptime(contract.lastTradeDateOrContractMonth, "%Y%m%d").date()
+                start_date = datetime.datetime.strptime(position.startdate, "%Y%m%d").date()
+                days = (expiry_date - start_date).days + 1
+                dte = (expiry_date - datetime.date.today()).days + 1
+                dit = (datetime.date.today() - start_date).days + 1
+            else:
+                days = 1
+                dte = 1
+                dit = 1
+            ppd = (premium / days)
+            ppd_now = pl /days
+            strike = contract.strike if hasattr(contract, 'strike') else ""
+            underlying = position.underlyingPrice if hasattr(position, 'underlyingPrice') else ""
+            output = [
+                contract.symbol,
+                strike,
+                underlying,
+                position.n,
+                opttype,
+                startdate,
+                optexpire,
+                premium,
+                lastPrice,
+                buyback,
+                pl,
+                days,
+                dit,
+                dte,
+                ppd,
+                ppd_now,
+            ]
+            display_list = []
+            for i, value in enumerate(output):
+                if type(value) in [float, int]:
+                    if int(value) == value:
+                        display_list.append(f"{int(value)}")
+                    else:
+                        display_list.append(f"{value:.2f}")
+                elif value is None:
+                    display_list.append("")
+                else:
+                    display_list.append(str(value))
+
+            for col, value in enumerate(display_list):
+                grid.SetCellValue(row, col, value)
+
+            self.highlightcells(output, row)
+                
         grid.AutoSizeColumns()
+
+    def findColumnByLabel(self, label):
+        grid = self.mainframe.grid_portfolio
+        for col in range(grid.GetNumberCols()):
+            if grid.GetColLabelValue(col) == label:
+                return col
+        return -1
+
+    def highlightcells(self, output, row):
+        """Highlight cells based on certain conditions"""
+        strike_col = self.findColumnByLabel("Strike")
+        underlying_col = self.findColumnByLabel("Underlying")
+        if strike_col != -1 and underlying_col != -1:
+            try:
+                strike = float(output[strike_col])
+                underlying = float(output[underlying_col])
+                if underlying < strike :
+                    self.mainframe.grid_portfolio.SetCellTextColour(row, underlying_col, "red")
+                else:
+                    # Reset to default background
+                    self.mainframe.grid_portfolio.SetCellTextColour(row, underlying_col, "green")
+            except (ValueError, TypeError):
+                pass  # Ignore if conversion fails
+
 
     def finalizePortfolioDisplay(self):
         """Final portfolio display update"""

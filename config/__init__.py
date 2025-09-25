@@ -20,9 +20,13 @@ def find_project_root(start_path=None):
 
 def gui(c):
     c.portfolio_labels =  \
-        ["Symbol", "N", "Type", "Start", "Expire", "Premium", "Last", "PL", "PPD", "ROI"]
+        ["Symbol", "Strike", "Underlying", "N", "Type", "Start", "Expire", "Premium", "Last", "Buyback", "PL"]
+    c.portfolio_labels += [ "Days",
+                "DIT",
+                "DTE",
+                "PPD",
+                "PPD_NOW"]
     c.portfolio_columns_left = ["Symbol", "Type"]
-    c.options_labels =  ["Expiration", "Strike", "Type", "Delta", "Mid", "IV","PPD", "ROI"]
     return c
 
 def path(c):

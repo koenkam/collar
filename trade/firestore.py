@@ -49,6 +49,7 @@ class FirestoreDB:
                 'expiry': self.controller.portfolio[instrument_id].contract.lastTradeDateOrContractMonth,
                 'n': self.controller.portfolio[instrument_id].n,
                 'avgCost': self.controller.portfolio[instrument_id].avgCost,
+                'conId': self.controller.portfolio[instrument_id].contract.conId,
                 
             }
             position_doc.set(position_data)

@@ -57,80 +57,7 @@ class IBApi(EWrapper, EClient):
     def reqPositions(self, *args, **kwargs):
         super().reqPositions()
 
-    """
-    def _prepare_contractDetailsOption(self):
-        if self.command["method_name"] != "reqContractDetails":
-            return
-        if not "option" in self.command:
-            return
-        option = self.command["option"]
-        #self.command is defined as: {"method_name": "reqContractDetails", "option": {"symbol": "AAPL", "expiry": "20240920", "strike": 175, "right": "C"}, "reqId": 1}
-        #turn this into the signature for the reqContractDetails method
-        # reqContractDetails(self, reqId: int, contract: Contract)
-        contract = Contract()
-        contract.symbol = option.get("symbol", "")
-        contract.secType = "OPT"
-        contract.exchange = "SMART"
-        contract.currency = "USD"
-        contract.lastTradeDateOrContractMonth = option.get("lastTradeDateOrContractMonth", "")
-        contract.strike = option.get("strike", 0.0)
-        contract.right = option.get("right", "")
-        self.command["contract"] = contract
-        del self.command["option"]
-
-
-    def _prepare_contractDetailsStock(self):
-        if self.command["method_name"] != "reqContractDetails":
-            return
-        if not "stock" in self.command:
-            return
-        #self.command is defined as: {"method_name": "reqContractDetails", "stock": "AAPL", "reqId": 1}
-        #turn this into the signature for the reqContractDetails method
-        # reqContractDetails(self, reqId: int, contract: Contract)
-        contract = Contract()
-        contract.symbol = self.command["stock"]
-        contract.secType = "STK"
-        contract.exchange = "SMART"
-        contract.currency = "USD"
-        self.command["contract"] = contract
-        del self.command["stock"]
-
-    
-    def _prepare_reqMktData(self):
-
-        if self.command["method_name"] != "reqMktData":
-            return
-        #self.command is defined as: {"method_name": "reqMktData", "conId": 123123123123, "reqId": 1}
-        #turn this into the signature for the reqMktData method
-        # reqMktData(self, reqId: TickerId, contract: Contract, genericTickList: str, snapshot: bool, regulatorySnapshot: bool, mktDataOptions: ListOfTagValue)
-        if self.command["secType"] == "STK":
-            contract = Contract()
-            contract.conId = self.command["conId"]
-            contract.exchange = "SMART"
-            contract.secType = "STK"
-            contract.currency = "USD"
-            self.command["contract"] = contract
-
-            #add default values for the other parameters
-            self.command["genericTickList"] = "221"
-            self.command["snapshot"] = False
-            self.command["regulatorySnapshot"] = False
-            self.command["mktDataOptions"] = []
-        elif self.command["secType"] == "OPT":
-            contract = Contract()
-            contract.conId = self.command["conId"]
-            contract.exchange = "SMART"
-            contract.secType = "OPT"
-            contract.currency = "USD"
-            self.command["contract"] = contract
-            # Request Greeks and implied volatility data
-            self.command["genericTickList"] = "106"  # Model option, Impl Vol, Gamma, Theta, Delta
-        self.command["snapshot"] = False
-        self.command["regulatorySnapshot"] = False
-        self.command["mktDataOptions"] = []
-        del self.command["secType"]
-        del self.command["conId"]
-    """
+  
         
     def _execute_command(self):
         """Execute IB API commands - pure generic dispatcher"""
@@ -201,6 +128,7 @@ class IBApi(EWrapper, EClient):
                             theta: float, undPrice: float):
         return
     
+    """
     def contractDetails(self, reqId: int, contract: ContractDetails):
         if contract.contract.secType == "STK":
             kwargs = {
@@ -226,7 +154,8 @@ class IBApi(EWrapper, EClient):
             "args": args,
             "kwargs": kwargs
         })
-
+"""
+    """
     @auto_queue
     def securityDefinitionOptionParameter(self, reqId: int, exchange: str, 
                                     underlyingConId: int, tradingClass: str,
@@ -236,13 +165,12 @@ class IBApi(EWrapper, EClient):
 
     @auto_queue 
     def securityDefinitionOptionParameterEnd(self, reqId: int):
-        """Called when all option parameter data has been received"""
         return
-
+    """ 
 
     @auto_queue
     def position(self, account: str, contract: Contract, position: float, avgCost: float):
-        # Store positions in self.positions
+        """# Store positions in self.positions
         self.positions.append({
             "account": account,
             "symbol": contract.symbol,
@@ -250,8 +178,8 @@ class IBApi(EWrapper, EClient):
             "position": position,
             "avgCost": avgCost
         })
-        return
-        return
+        """
+        return  
 
     @auto_queue
     def positionEnd(self):
