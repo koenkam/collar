@@ -11,7 +11,7 @@ c=create_c()
 class MainFrame(wx.Frame):
 
     def __init__(self, controller):
-        super().__init__(None, title="The Collar", size=(900, 800))
+        super().__init__(None, title="The Collar", size=(1200, 800))
         self.controller = controller
         self.controller.mainframe = self  # Set the mainframe reference in controller
         self.init_ui()

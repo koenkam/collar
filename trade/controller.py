@@ -151,7 +151,6 @@ class Controller:
             price = self.incoming_command["kwargs"]["price"]
             self.portfolio[instrument_id].lastPrice = price
             self.portfolio[instrument_id].dirty = True
-            print(contract.symbol, price)
             self.updatePortfolioDisplay()
 
     def handle_tickOptionComputation(self):
@@ -172,6 +171,10 @@ class Controller:
         account = self.incoming_command["kwargs"].get("account", "")
         contract = self.incoming_command["kwargs"].get("contract", {})
         n = self.incoming_command["kwargs"].get("position", 0.0)
+        if n == 0:
+            return
+        if contract.symbol == "SPX":
+            return
         avgCost = self.incoming_command["kwargs"].get("avgCost", 0.0)
         
         instrument_id = self.get_instrument_id_from_contract(contract)
@@ -198,10 +201,7 @@ class Controller:
             "regulatorySnapshot": False,
             "mktDataOptions": []
         }
-        print(f"Requesting market data for {contract.symbol} {contract.secType} {contract.strike} {contract.right} {contract.lastTradeDateOrContractMonth} {contract.conId}")
         self.sendIbCommand(command)
-        #when i receive an option position (and the option contract), i wish to retrieve the 
-        #price of the underlying stock
         if contract.secType == "OPT":
             stock_contract = Contract()
             stock_contract.symbol = contract.symbol
@@ -257,7 +257,7 @@ class Controller:
             buyback = lastPrice * position.n * 100
             premium = position.premium if hasattr(position, 'premium') \
                 and position.premium is not None else 0.0
-            pl = premium + buyback if buyback > 0 else 0.0
+            pl = premium + buyback if buyback != 0 else 0.0
             if contract.secType == 'OPT' and startdate:
                 expiry_date = datetime.datetime.strptime(contract.lastTradeDateOrContractMonth, "%Y%m%d").date()
                 start_date = datetime.datetime.strptime(position.startdate, "%Y%m%d").date()
@@ -329,6 +329,30 @@ class Controller:
                 else:
                     # Reset to default background
                     self.mainframe.grid_portfolio.SetCellTextColour(row, underlying_col, "green")
+            except (ValueError, TypeError):
+                pass  # Ignore if conversion fails
+        ppd_now_col = self.findColumnByLabel("PPD_NOW")
+        ppd_col = self.findColumnByLabel("PPD")
+        if ppd_now_col != -1 and ppd_col != -1:
+            try:
+                ppd_now = float(output[ppd_now_col])
+                ppd = float(output[ppd_col])
+                if ppd_now > ppd:
+                    self.mainframe.grid_portfolio.SetCellTextColour(row, ppd_now_col, "green")
+                else:
+                    # Reset to default background
+                    self.mainframe.grid_portfolio.SetCellTextColour(row, ppd_now_col, "white")
+            except (ValueError, TypeError):
+                pass  # Ignore if conversion fails
+        pl_col = self.findColumnByLabel("PL")
+        if pl_col != -1:
+            try:
+                pl = float(output[pl_col])
+                if pl > 0:
+                    self.mainframe.grid_portfolio.SetCellTextColour(row, pl_col, "green")
+                else:
+                    # Reset to default background
+                    self.mainframe.grid_portfolio.SetCellTextColour(row, pl_col, "red")
             except (ValueError, TypeError):
                 pass  # Ignore if conversion fails
 

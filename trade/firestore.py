@@ -25,7 +25,6 @@ class FirestoreDB:
             data = doc.to_dict()
             data['id'] = doc.id
             self.portfolio.append(data)
-        print("Fetched portfolio from Firestore:", self.portfolio)
         return self.portfolio
 
    
