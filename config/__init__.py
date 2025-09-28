@@ -20,13 +20,15 @@ def find_project_root(start_path=None):
 
 def gui(c):
     c.portfolio_labels =  \
-        ["Symbol", "Strike", "Underlying", "N", "Type", "Start", "Expire", "Premium", "Last", "Buyback", "PL"]
+        ["Symbol", "Strike", "Underlying", "ITM%", "N", "Type", "Start", "Expire", "Premium", "Last", "Buyback", "PL"]
     c.portfolio_labels += [ "Days",
                 "DIT",
                 "DTE",
                 "PPD",
                 "PPD_NOW"]
+    c.portfolio_labels += ["Assign"]
     c.portfolio_columns_left = ["Symbol", "Type"]
+    c.itm_threshold = 2.0  # ITM% threshold to consider option ITM
     return c
 
 def path(c):
@@ -42,9 +44,6 @@ def wheel(c):
         'AMD'
     ]
     c.default_exchange = 'CBOE'
-    c.strike_threshold = 0.9  # 5%
-    c.delta_min = -0.3
-    c.delta_max = -0.2
     return c
 
 def make_c():

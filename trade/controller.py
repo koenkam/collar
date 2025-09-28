@@ -9,6 +9,7 @@ from .firestore import FirestoreDB
 from util import Stub
 
 class Controller:
+
     def __init__(self, gui_to_ib, ib_to_gui):
         self.ib_to_gui = ib_to_gui
         self.gui_to_ib = gui_to_ib
@@ -20,6 +21,9 @@ class Controller:
         self.stats = {}
         self.portfolio = {}
         self.portfolio_gui_map = {}
+        self.mainframe = None  # Will be set by MainFrame
+        self.displayer = None
+        
 
     def get_instrument_id_from_contract(self, contract):
         
@@ -136,14 +140,14 @@ class Controller:
                         and "price" in self.incoming_command["kwargs"]:
                     self.portfolio[underlying_instrument_id].underlyingPrice = self.incoming_command["kwargs"]["price"]
                     self.portfolio[underlying_instrument_id].dirty = True
-                    self.updatePortfolioDisplay()
+                    self.displayer.updatePortfolioDisplay()
                     return
                 
             if "price" in self.incoming_command["kwargs"]:
                 price = self.incoming_command["kwargs"]["price"]
                 self.portfolio[instrument_id].lastPrice = price
                 self.portfolio[instrument_id].dirty = True
-                self.updatePortfolioDisplay()
+                self.displayer.updatePortfolioDisplay()
             return
         #if contract.conId == 808931954:  # AMD
         #    print("AMD tickPrice", self.incoming_command)
@@ -151,7 +155,7 @@ class Controller:
             price = self.incoming_command["kwargs"]["price"]
             self.portfolio[instrument_id].lastPrice = price
             self.portfolio[instrument_id].dirty = True
-            self.updatePortfolioDisplay()
+            self.displayer.updatePortfolioDisplay()
 
     def handle_tickOptionComputation(self):
         reqId = self.incoming_command["kwargs"]["reqId"]
@@ -164,7 +168,7 @@ class Controller:
         self.portfolio[instrument_id].vega = self.incoming_command["kwargs"].get("vega", None)
         self.portfolio[instrument_id].optPrice = self.incoming_command["kwargs"].get("optPrice", None)
         self.portfolio[instrument_id].dirty = True
-        self.updatePortfolioDisplay()
+        self.displayer.updatePortfolioDisplay()
 
     def handle_position(self):
         """Handle individual position updates"""
@@ -190,7 +194,7 @@ class Controller:
         self.firestore.merge_portfolio_item(instrument_id)
         
         # Update GUI portfolio display
-        self.updatePortfolioDisplay()
+        self.displayer.updatePortfolioDisplay()
 
         contract.exchange = c.default_exchange
         command = {
@@ -223,139 +227,7 @@ class Controller:
         # Final GUI update or summary calculations
         self.finalizePortfolioDisplay()
 
-    def updatePortfolioDisplay(self):
-        grid = self.mainframe.grid_portfolio
-        
-        # Ensure enough rows
-        current_rows = grid.GetNumberRows()
-        required_rows = len(self.portfolio.items())
-        if required_rows > current_rows:
-            grid.AppendRows(required_rows - current_rows)
-        elif required_rows < current_rows:
-            grid.DeleteRows(0, current_rows - required_rows)
-        
-        for instrument_id, position in self.portfolio.items():
-            if not position.dirty:
-                pass
-                #return
-            position.dirty = False
-            contract = position.contract
-            if instrument_id in self.portfolio_gui_map:
-                row = self.portfolio_gui_map[instrument_id]
-            else:
-                row = max(self.portfolio_gui_map.values(), default=-1) + 1
-                self.portfolio_gui_map[instrument_id] = row
-            if contract.secType == 'OPT':
-                opttype = 'PUT' if contract.right == 'P' else 'CALL'
-                optexpire = contract.lastTradeDateOrContractMonth
-            else:
-                opttype = contract.secType
-                optexpire = ""
-            
-            startdate = position.startdate if hasattr(position, 'startdate') else ""
-            lastPrice = position.lastPrice if hasattr(position, 'lastPrice') and position.lastPrice is not None and position.lastPrice >= 0 else 0.0
-            buyback = lastPrice * position.n * 100
-            premium = position.premium if hasattr(position, 'premium') \
-                and position.premium is not None else 0.0
-            pl = premium + buyback if buyback != 0 else 0.0
-            if contract.secType == 'OPT' and startdate:
-                expiry_date = datetime.datetime.strptime(contract.lastTradeDateOrContractMonth, "%Y%m%d").date()
-                start_date = datetime.datetime.strptime(position.startdate, "%Y%m%d").date()
-                days = (expiry_date - start_date).days + 1
-                dte = (expiry_date - datetime.date.today()).days + 1
-                dit = (datetime.date.today() - start_date).days + 1
-            else:
-                days = 1
-                dte = 1
-                dit = 1
-            ppd = (premium / days)
-            ppd_now = pl /days
-            strike = contract.strike if hasattr(contract, 'strike') else ""
-            underlying = position.underlyingPrice if hasattr(position, 'underlyingPrice') else ""
-            output = [
-                contract.symbol,
-                strike,
-                underlying,
-                position.n,
-                opttype,
-                startdate,
-                optexpire,
-                premium,
-                lastPrice,
-                buyback,
-                pl,
-                days,
-                dit,
-                dte,
-                ppd,
-                ppd_now,
-            ]
-            display_list = []
-            for i, value in enumerate(output):
-                if type(value) in [float, int]:
-                    if int(value) == value:
-                        display_list.append(f"{int(value)}")
-                    else:
-                        display_list.append(f"{value:.2f}")
-                elif value is None:
-                    display_list.append("")
-                else:
-                    display_list.append(str(value))
-
-            for col, value in enumerate(display_list):
-                grid.SetCellValue(row, col, value)
-
-            self.highlightcells(output, row)
-                
-        grid.AutoSizeColumns()
-
-    def findColumnByLabel(self, label):
-        grid = self.mainframe.grid_portfolio
-        for col in range(grid.GetNumberCols()):
-            if grid.GetColLabelValue(col) == label:
-                return col
-        return -1
-
-    def highlightcells(self, output, row):
-        """Highlight cells based on certain conditions"""
-        strike_col = self.findColumnByLabel("Strike")
-        underlying_col = self.findColumnByLabel("Underlying")
-        if strike_col != -1 and underlying_col != -1:
-            try:
-                strike = float(output[strike_col])
-                underlying = float(output[underlying_col])
-                if underlying < strike :
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, underlying_col, "red")
-                else:
-                    # Reset to default background
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, underlying_col, "green")
-            except (ValueError, TypeError):
-                pass  # Ignore if conversion fails
-        ppd_now_col = self.findColumnByLabel("PPD_NOW")
-        ppd_col = self.findColumnByLabel("PPD")
-        if ppd_now_col != -1 and ppd_col != -1:
-            try:
-                ppd_now = float(output[ppd_now_col])
-                ppd = float(output[ppd_col])
-                if ppd_now > ppd:
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, ppd_now_col, "green")
-                else:
-                    # Reset to default background
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, ppd_now_col, "white")
-            except (ValueError, TypeError):
-                pass  # Ignore if conversion fails
-        pl_col = self.findColumnByLabel("PL")
-        if pl_col != -1:
-            try:
-                pl = float(output[pl_col])
-                if pl > 0:
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, pl_col, "green")
-                else:
-                    # Reset to default background
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, pl_col, "red")
-            except (ValueError, TypeError):
-                pass  # Ignore if conversion fails
-
+    
 
     def finalizePortfolioDisplay(self):
         """Final portfolio display update"""

@@ -5,6 +5,7 @@ import queue
 from .api import IBApi
 from config import create_c
 from .controller import Controller
+from .display import Displayer
 c=create_c()
 
 
@@ -14,6 +15,7 @@ class MainFrame(wx.Frame):
         super().__init__(None, title="The Collar", size=(1200, 800))
         self.controller = controller
         self.controller.mainframe = self  # Set the mainframe reference in controller
+        self.controller.displayer = Displayer(self.controller)  # Initialize Displayer
         self.init_ui()
         
         # Timer to check for incoming data
