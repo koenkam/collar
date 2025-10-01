@@ -58,7 +58,7 @@ class Displayer:
                 dte = 1
                 dit = 1
             ppd = (premium / days)
-            ppd_now = pl /days
+            ppd_now = pl /dit
             
             underlying = position.underlyingPrice if hasattr(position, 'underlyingPrice') else ""
             if underlying and strike and lastPrice != 0.0 and contract.secType == 'OPT':
