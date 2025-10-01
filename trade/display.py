@@ -165,7 +165,7 @@ class Displayer:
                     self.mainframe.grid_portfolio.SetCellTextColour(row, assign_col, "red")
                 else:
                     # Reset to default background
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, assign_col, "green")
+                    self.mainframe.grid_portfolio.SetCellTextColour(row, assign_col, "white")
             except (ValueError, TypeError):
                 pass  # Ignore if conversion fails
         itm_col = self.findColumnByLabel("ITM%")
