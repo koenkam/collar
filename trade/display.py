@@ -69,6 +69,8 @@ class Displayer:
             else:
                 assignvalue = ""
                 itm_percentage = ""
+
+            closeat = (premium- dit * ppd)/ 100 / abs(position.n) if position.n != 0 else 0.0
             output = [
                 contract.symbol,
                 strike,
@@ -80,6 +82,7 @@ class Displayer:
                 optexpire,
                 premium,
                 lastPrice,
+                closeat,
                 buyback,
                 pl,
                 days,
@@ -176,5 +179,18 @@ class Displayer:
                     self.mainframe.grid_portfolio.SetCellTextColour(row, itm_col, "red")
                 elif itm != "" and itm >= -c.itm_threshold:
                     self.mainframe.grid_portfolio.SetCellTextColour(row, itm_col, "white")
+            except (ValueError, TypeError):
+                pass  # Ignore if conversion fails
+        closeat_col = self.findColumnByLabel("Close@")
+        last_col = self.findColumnByLabel("Last")
+        if closeat_col != -1 and last_col != -1:
+            try:
+                closeat = float(output[closeat_col])
+                last = float(output[last_col])
+                if last < closeat: # last is less than closeat
+                    self.mainframe.grid_portfolio.SetCellTextColour(row, closeat_col, "green")
+                else:
+                    # Reset to default background
+                    self.mainframe.grid_portfolio.SetCellTextColour(row, closeat_col, "white")
             except (ValueError, TypeError):
                 pass  # Ignore if conversion fails

@@ -20,7 +20,7 @@ def find_project_root(start_path=None):
 
 def gui(c):
     c.portfolio_labels =  \
-        ["Symbol", "Strike", "Underlying", "ITM%", "N", "Type", "Start", "Expire", "Premium", "Last", "Buyback", "PL"]
+        ["Symbol", "Strike", "Underlying", "ITM%", "N", "Type", "Start", "Expire", "Premium", "Last", "Close@","Buyback", "PL"]
     c.portfolio_labels += [ "Days",
                 "DIT",
                 "DTE",
