@@ -119,78 +119,125 @@ class Displayer:
         return -1
 
     def highlightcells(self, output, row):
-        """Highlight cells based on certain conditions"""
-        strike_col = self.findColumnByLabel("Strike")
-        underlying_col = self.findColumnByLabel("Underlying")
-        if strike_col != -1 and underlying_col != -1:
-            try:
-                strike = float(output[strike_col])
-                underlying = float(output[underlying_col])
-                if underlying < strike :
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, underlying_col, "red")
+        """Highlight cells based on certain conditions using configurable rules"""
+        highlighting_rules = [
+            self._create_strike_underlying_rule(),
+            self._create_ppd_comparison_rule(),
+            self._create_pl_rule(),
+            self._create_assign_rule(),
+            self._create_itm_rule(),
+            self._create_closeat_rule()
+        ]
+        
+        for rule in highlighting_rules:
+            self._apply_highlighting_rule(rule, output, row)
+    
+    def _create_strike_underlying_rule(self):
+        """Rule for highlighting underlying price based on strike comparison"""
+        return {
+            'columns': ['Strike', 'Underlying'],
+            'target_column': 'Underlying',
+            'condition': lambda strike, underlying: underlying < strike,
+            'colors': {'true': 'red', 'false': 'green'}
+        }
+    
+    def _create_ppd_comparison_rule(self):
+        """Rule for highlighting PPD_NOW based on PPD comparison"""
+        return {
+            'columns': ['PPD_NOW', 'PPD'],
+            'target_column': 'PPD_NOW',
+            'condition': lambda ppd_now, ppd: ppd_now > ppd,
+            'colors': {'true': 'green', 'false': 'white'}
+        }
+    
+    def _create_pl_rule(self):
+        """Rule for highlighting P&L with three-way color coding"""
+        def pl_condition(pl):
+            if pl > 0:
+                return 'positive'
+            elif pl < 0:
+                return 'negative'
+            else:
+                return 'neutral'
+        
+        return {
+            'columns': ['PL'],
+            'target_column': 'PL',
+            'condition': pl_condition,
+            'colors': {'positive': 'green', 'negative': 'red', 'neutral': 'white'},
+            'multi_condition': True
+        }
+    
+    def _create_assign_rule(self):
+        """Rule for highlighting assignment value"""
+        return {
+            'columns': ['Assign'],
+            'target_column': 'Assign',
+            'condition': lambda assign: assign < 0,
+            'colors': {'true': 'red', 'false': 'white'}
+        }
+    
+    def _create_itm_rule(self):
+        """Rule for highlighting ITM percentage based on threshold"""
+        return {
+            'columns': ['ITM%'],
+            'target_column': 'ITM%',
+            'condition': lambda itm: itm != "" and itm < -c.itm_threshold,
+            'colors': {'true': 'red', 'false': 'white'},
+            'allow_empty': True
+        }
+    
+    def _create_closeat_rule(self):
+        """Rule for highlighting close-at price based on last price comparison"""
+        return {
+            'columns': ['Close@', 'Last'],
+            'target_column': 'Close@',
+            'condition': lambda closeat, last: last < closeat,
+            'colors': {'true': 'green', 'false': 'white'}
+        }
+    
+    def _apply_highlighting_rule(self, rule, output, row):
+        """Apply a single highlighting rule to the grid"""
+        try:
+            # Get column indices
+            column_indices = {}
+            for col_name in rule['columns']:
+                col_index = self.findColumnByLabel(col_name)
+                if col_index == -1:
+                    return  # Skip rule if any required column is missing
+                column_indices[col_name] = col_index
+            
+            # Extract values and convert to float
+            values = []
+            for col_name in rule['columns']:
+                value = output[column_indices[col_name]]
+                if value == "":
+                    if rule.get('allow_empty', False):
+                        values.append(value)
+                    else:
+                        return  # Skip if empty value not allowed
                 else:
-                    # Reset to default background
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, underlying_col, "green")
-            except (ValueError, TypeError):
-                pass  # Ignore if conversion fails
-        ppd_now_col = self.findColumnByLabel("PPD_NOW")
-        ppd_col = self.findColumnByLabel("PPD")
-        if ppd_now_col != -1 and ppd_col != -1:
-            try:
-                ppd_now = float(output[ppd_now_col])
-                ppd = float(output[ppd_col])
-                if ppd_now > ppd:
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, ppd_now_col, "green")
-                else:
-                    # Reset to default background
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, ppd_now_col, "white")
-            except (ValueError, TypeError):
-                pass  # Ignore if conversion fails
-        pl_col = self.findColumnByLabel("PL")
-        if pl_col != -1:
-            try:
-                pl = float(output[pl_col])
-                if pl > 0:
-                    color = "green"
-                elif pl < 0 :
-                    color = "red"
-                else:
-                    color = "white"
-                self.mainframe.grid_portfolio.SetCellTextColour(row, pl_col, color)
-            except (ValueError, TypeError):
-                pass  # Ignore if conversion fails
-        assign_col = self.findColumnByLabel("Assign")
-        n_col = self.findColumnByLabel("N")
-        if assign_col != -1:
-            try:
-                assign = float(output[assign_col])
-                if assign < 0:
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, assign_col, "red")
-                else:
-                    # Reset to default background
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, assign_col, "white")
-            except (ValueError, TypeError):
-                pass  # Ignore if conversion fails
-        itm_col = self.findColumnByLabel("ITM%")
-        if itm_col != -1:
-            try:
-                itm = float(output[itm_col])
-                if itm != "" and itm < -c.itm_threshold:
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, itm_col, "red")
-                elif itm != "" and itm >= -c.itm_threshold:
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, itm_col, "white")
-            except (ValueError, TypeError):
-                pass  # Ignore if conversion fails
-        closeat_col = self.findColumnByLabel("Close@")
-        last_col = self.findColumnByLabel("Last")
-        if closeat_col != -1 and last_col != -1:
-            try:
-                closeat = float(output[closeat_col])
-                last = float(output[last_col])
-                if last < closeat: # last is less than closeat
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, closeat_col, "green")
-                else:
-                    # Reset to default background
-                    self.mainframe.grid_portfolio.SetCellTextColour(row, closeat_col, "white")
-            except (ValueError, TypeError):
-                pass  # Ignore if conversion fails
+                    try:
+                        values.append(float(value))
+                    except (ValueError, TypeError):
+                        if rule.get('allow_empty', False):
+                            values.append(value)
+                        else:
+                            return
+            
+            # Apply condition
+            if rule.get('multi_condition', False):
+                # For rules with multiple return values (like PL rule)
+                condition_result = rule['condition'](values[0])
+                color = rule['colors'].get(condition_result, 'white')
+            else:
+                # For binary conditions
+                condition_result = rule['condition'](*values)
+                color = rule['colors']['true' if condition_result else 'false']
+            
+            # Apply color
+            target_col = column_indices[rule['target_column']]
+            self.mainframe.grid_portfolio.SetCellTextColour(row, target_col, color)
+            
+        except (ValueError, TypeError, KeyError):
+            pass  # Ignore if conversion fails or rule is malformed
