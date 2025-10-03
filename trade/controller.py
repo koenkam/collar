@@ -17,6 +17,7 @@ class Controller:
         self.firestore = FirestoreDB(self)
         self.firestore.get_portfolio()
         self.reqId = 1
+        self.orderId = 1  # Separate counter for order IDs
         self.requests = OrderedDict()  # Maintain order of requests
         self.conId = None
         self.stats = {}
@@ -45,7 +46,9 @@ class Controller:
     
 
     def get_instrument_id_from_request(self, reqId):
-        request = self.requests[reqId]
+        request = self.requests.get(reqId)
+        if request is None:
+            return ""
         contract = request.get("contract", None)
         if contract is None:
             return ""
@@ -64,10 +67,17 @@ class Controller:
                 handler = getattr(self, f"handle_{self.incoming_command['type']}")
                 handler()
                 continue
+            
+            # Check for both reqId and orderId
+            incoming_request_id = None
             try:
-                incoming_request_id = int(self.incoming_command["kwargs"]["reqId"])
+                if "reqId" in self.incoming_command["kwargs"]:
+                    incoming_request_id = int(self.incoming_command["kwargs"]["reqId"])
+                elif "orderId" in self.incoming_command["kwargs"]:
+                    incoming_request_id = int(self.incoming_command["kwargs"]["orderId"])
             except (KeyError, ValueError, TypeError):
                 incoming_request_id = None
+                
             if incoming_request_id in self.requests:
                 command = self.requests[incoming_request_id]
                 command_type = self.incoming_command["type"]
@@ -88,16 +98,21 @@ class Controller:
                     print(f"No handler for method: {command_type}")
 
     def sendIbCommand(self, command, extra={}):
-        newcommand = command.copy()
-        if command["method_name"] in ["placeOrder"]:
-            pass
+        newcommand = command.copy()        
+        if command["method_name"] in ["placeOrder", "cancelOrder"]:
+            if "orderId" not in newcommand:
+                newcommand["orderId"] = self.orderId
+                self.orderId += 1  # Increment orderId for order commands
         elif "reqId" not in newcommand:
             newcommand["reqId"] = self.reqId
+            self.reqId += 1  # Increment reqId for other requests
+       
         self.gui_to_ib.put(newcommand.copy())
         for k, v in extra.items():
             newcommand[k] = v
-        self.requests[self.reqId] = newcommand
-        self.reqId += 1
+        # Use the appropriate ID for storing the request
+        request_key = newcommand.get("orderId", newcommand.get("reqId"))
+        self.requests[request_key] = newcommand
         if self.stats.get(command["method_name"]) is None:
             self.stats[command["method_name"]] = 0
         self.stats[command["method_name"]] += 1
@@ -142,8 +157,12 @@ class Controller:
 
     def handle_tickPrice(self):        
         instrument_id = self.get_instrument_id_from_request(self.incoming_command["kwargs"]["reqId"])
-        request = self.requests[self.incoming_command["kwargs"]["reqId"]]
+        request = self.requests.get(self.incoming_command["kwargs"]["reqId"])
+        if request is None:
+            return
         contract = request.get("contract", None)
+        if contract is None:
+            return
         if contract.secType == "STK":
             if instrument_id not in self.portfolio:
                 underlying_instrument_id = self.find_underlying_for_stocktick(contract.symbol)
@@ -171,7 +190,12 @@ class Controller:
     def handle_tickOptionComputation(self):
         reqId = self.incoming_command["kwargs"]["reqId"]
         instrument_id = self.get_instrument_id_from_request(reqId)
-        contract = self.requests[reqId].get("contract", None)
+        request = self.requests.get(reqId)
+        if request is None:
+            return
+        contract = request.get("contract", None)
+        if contract is None:
+            return
         self.portfolio[instrument_id].impliedVol = self.incoming_command["kwargs"].get("impliedVol", None)
         self.portfolio[instrument_id].delta = self.incoming_command["kwargs"].get("delta", None)
         self.portfolio[instrument_id].gamma = self.incoming_command["kwargs"].get("gamma", None)
@@ -276,7 +300,7 @@ class Controller:
                 position.orderState.status = self.incoming_command["kwargs"].get("status", "")
                 position.dirty = True
                 self.displayer.updatePortfolioDisplay()
-                self.adjust_order(position)
+                #self.adjust_order(position)
                 break
         
 
@@ -320,14 +344,22 @@ class Controller:
         if new_limit < 0.15:
             new_limit = 0.15
         
+        #delete the existing order and place a new one
+        command = {
+            "method_name": "cancelOrder",
+            "orderId": position.order.orderId
+        }
+        self.sendIbCommand(command)
+
+
         # Create a NEW order object instead of modifying the existing one
-        from ibapi.order import Order
         modified_order = Order()
         
+        
         # Copy all properties from the original order
-        modified_order.orderId = position.order.orderId
+        modified_order.orderId = 0  # Will be assigned by sendIbCommand
         modified_order.clientId = 0
-        modified_order.permId = position.order.permId
+        modified_order.permId = 0
         modified_order.action = position.order.action
         modified_order.totalQuantity = position.order.totalQuantity
         modified_order.orderType = position.order.orderType
@@ -349,11 +381,10 @@ class Controller:
             "method_name": "placeOrder",
             "contract": position.contract,
             "order": modified_order,  # ✅ Use the new order object
-            "orderId": position.order.orderId
         }
         self.sendIbCommand(command)
         
-        print(f"Modified order {position.order.orderId} from {position.order.lmtPrice} to {new_limit}")
+        print(f"Modified order {modified_order.orderId} from {position.order.lmtPrice} to {new_limit}")
 
     def handle_openOrderEnd(self):
         self.finalizePortfolioDisplay()

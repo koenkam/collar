@@ -154,6 +154,10 @@ class IBApi(EWrapper, EClient):
                            permId, parentId, lastFillPrice, clientId,
                            whyHeld, mktCapPrice)
 
+    @auto_queue
+    def cancelOrder(self, orderId: OrderId):
+        super().cancelOrder(orderId)
+
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=''):
         if reqId == -1:
             return
