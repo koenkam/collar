@@ -8,22 +8,27 @@ class Displayer:
         self.controller = controller
         self.mainframe = controller.mainframe
 
-    def updatePortfolioDisplay(self):
+    def adjust_grid(self):
         grid = self.mainframe.grid_portfolio
         portfolio = self.controller.portfolio
-        portfolio_gui_map = self.controller.portfolio_gui_map
-        # Ensure enough rows
+
         current_rows = grid.GetNumberRows()
         required_rows = len(portfolio.items())
         if required_rows > current_rows:
             grid.AppendRows(required_rows - current_rows)
         elif required_rows < current_rows:
             grid.DeleteRows(0, current_rows - required_rows)
+
+    def updatePortfolioDisplay(self):
+        self.adjust_grid()
+        grid = self.mainframe.grid_portfolio
+        portfolio = self.controller.portfolio
+        portfolio_gui_map = self.controller.portfolio_gui_map
+        
         
         for instrument_id, position in portfolio.items():
             if not position.dirty:
                 pass
-                #return
             position.dirty = False
             contract = position.contract
             if instrument_id in portfolio_gui_map:
@@ -70,7 +75,18 @@ class Displayer:
                 assignvalue = ""
                 itm_percentage = ""
 
-            closeat = (premium- dit * ppd)/ 100 / abs(position.n) if position.n != 0 else 0.0
+            position.closeat = (premium- dit * ppd)/ 100 / abs(position.n) if position.n != 0 else 0.0
+            #print(position.closeat, premium, dit, ppd, position.n)
+            if hasattr(position, 'order'):
+                order = position.order.action
+                order_n = position.order.totalQuantity
+                order_lim = position.order.lmtPrice
+            else:
+                order = ""
+                order_n = ""
+                order_lim = ""
+
+
             output = [
                 contract.symbol,
                 strike,
@@ -82,7 +98,7 @@ class Displayer:
                 optexpire,
                 premium,
                 lastPrice,
-                closeat,
+                
                 buyback,
                 pl,
                 days,
@@ -90,7 +106,11 @@ class Displayer:
                 dte,
                 ppd,
                 ppd_now,
-                assignvalue
+                assignvalue,
+                position.closeat,
+                order,
+                order_n,
+                order_lim
             ]
             display_list = []
             for i, value in enumerate(output):

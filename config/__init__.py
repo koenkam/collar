@@ -20,13 +20,14 @@ def find_project_root(start_path=None):
 
 def gui(c):
     c.portfolio_labels =  \
-        ["Symbol", "Strike", "Underlying", "ITM%", "N", "Type", "Start", "Expire", "Premium", "Last", "Close@","Buyback", "PL"]
+        ["Symbol", "Strike", "Underlying", "ITM%", "N", "Type", "Start"]
+    c.portfolio_labels += ["Expire", "Premium", "Last", "Buyback", "PL"]
     c.portfolio_labels += [ "Days",
                 "DIT",
                 "DTE",
                 "PPD",
                 "PPD_NOW"]
-    c.portfolio_labels += ["Assign"]
+    c.portfolio_labels += ["Assign", "Close@", "Order", "Order_n", "Order_lim"]
     c.portfolio_columns_left = ["Symbol", "Type"]
     c.itm_threshold = 2.0  # ITM% threshold to consider option ITM
     return c

@@ -43,9 +43,6 @@ class IBApi(EWrapper, EClient):
             try:
                 if not self.gui_to_ib.empty():
                     self.command = self.gui_to_ib.get(timeout=1)
-                    #self._prepare_reqMktData()
-                    #self._prepare_contractDetailsStock()
-                    #self._prepare_contractDetailsOption()
                     self._execute_command()
                 time.sleep(0.1)  # Small delay to prevent busy waiting
             except Exception as e:
@@ -57,7 +54,9 @@ class IBApi(EWrapper, EClient):
     def reqPositions(self, *args, **kwargs):
         super().reqPositions()
 
-  
+    
+    def reqOpenOrders(self, *args, **kwargs ):
+        return super().reqOpenOrders()
         
     def _execute_command(self):
         """Execute IB API commands - pure generic dispatcher"""
@@ -128,71 +127,39 @@ class IBApi(EWrapper, EClient):
                             theta: float, undPrice: float):
         return
     
-    """
-    def contractDetails(self, reqId: int, contract: ContractDetails):
-        if contract.contract.secType == "STK":
-            kwargs = {
-                "reqId": reqId,
-                "secType": contract.contract.secType,
-                "conId": contract.contract.conId,
-            }
-        else:
-            kwargs = {
-                "reqId": reqId,
-                "secType": contract.contract.secType,
-                "conId": contract.contract.conId,
-                "strike": contract.contract.strike,
-                "right": contract.contract.right,
-                "lastTradeDateOrContractMonth": contract.contract.lastTradeDateOrContractMonth,
-            }
-        args = kwargs.values()
-
-
-        self.ib_to_gui.put({
-            "type": "contractDetails",
-            "reqId": reqId,
-            "args": args,
-            "kwargs": kwargs
-        })
-"""
-    """
-    @auto_queue
-    def securityDefinitionOptionParameter(self, reqId: int, exchange: str, 
-                                    underlyingConId: int, tradingClass: str,
-                                    multiplier: str, expirations: set,
-                                    strikes: set):
-        return
-
-    @auto_queue 
-    def securityDefinitionOptionParameterEnd(self, reqId: int):
-        return
-    """ 
-
+    
     @auto_queue
     def position(self, account: str, contract: Contract, position: float, avgCost: float):
-        """# Store positions in self.positions
-        self.positions.append({
-            "account": account,
-            "symbol": contract.symbol,
-            "secType": contract.secType,
-            "position": position,
-            "avgCost": avgCost
-        })
-        """
+        super().position(account, contract, position, avgCost)
         return  
 
     @auto_queue
     def positionEnd(self):
         return
 
+    @auto_queue
+    def openOrder(self, orderId, contract, order, orderState):
+        super().openOrder(orderId, contract, order, orderState)
 
+    @auto_queue
+    def openOrderEnd(self):
+        super().openOrderEnd()
+
+    @auto_queue
+    def orderStatus(self, orderId: OrderId, status: str, filled: float,
+                    remaining: float, avgFillPrice: float, permId: int,
+                    parentId: int, lastFillPrice: float, clientId: int,
+                    whyHeld: str, mktCapPrice: float):
+        super().orderStatus(orderId, status, filled, remaining, avgFillPrice,
+                           permId, parentId, lastFillPrice, clientId,
+                           whyHeld, mktCapPrice)
 
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=''):
         if reqId == -1:
             return
         if errorCode in [-1, 200, 201, 202]:  # Generic IB errors
             return
-        print(f"ERROR {reqId} {reqId==-1} {errorCode} {errorString}")
+        print(f"ERROR {reqId} {errorCode} {errorString}")
         if errorCode == 321 and reqId in [9001, 9002]:
             print("Account validation error - this might be due to incorrect account name")
             print(f"Available accounts: {self.accounts}")

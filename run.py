@@ -26,8 +26,6 @@ def main():
     
     ib_thread = threading.Thread(target=run_ib_api, daemon=True)
     ib_thread.start()
-
-    
     
     app = wx.App(False)
     
@@ -43,7 +41,7 @@ def main():
         frame.RequestUserAttention(wx.USER_ATTENTION_ERROR)
     
     app.SetTopWindow(frame)
-    controller.reqPositions()
+    controller.start()  # Start processing in controller
     app.MainLoop()
 
 if __name__ == "__main__":

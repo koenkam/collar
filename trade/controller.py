@@ -1,5 +1,6 @@
 from collections import OrderedDict
 from ibapi.contract import Contract
+from ibapi.order import Order
 import time
 import datetime
 from config import create_c
@@ -23,7 +24,10 @@ class Controller:
         self.portfolio_gui_map = {}
         self.mainframe = None  # Will be set by MainFrame
         self.displayer = None
-        
+    
+    def start(self):
+        self.reqPositions()
+        self.reqOpenOrders()
 
     def get_instrument_id_from_contract(self, contract):
         
@@ -56,15 +60,14 @@ class Controller:
 
             if self.incoming_command["type"] in ['command_result', 'error']:
                 return
-            if self.incoming_command["type"] in ['position', 'positionEnd']:
+            if self.incoming_command["type"] in ['position', 'positionEnd', 'openOrder', 'openOrderEnd']:
                 handler = getattr(self, f"handle_{self.incoming_command['type']}")
                 handler()
                 continue
             try:
                 incoming_request_id = int(self.incoming_command["kwargs"]["reqId"])
             except (KeyError, ValueError, TypeError):
-                print(f"Invalid or missing reqId in incoming command: {self.incoming_command}")
-            #print(f"looking for request id: {incoming_request_id} {self.requests}")
+                incoming_request_id = None
             if incoming_request_id in self.requests:
                 command = self.requests[incoming_request_id]
                 command_type = self.incoming_command["type"]
@@ -86,7 +89,9 @@ class Controller:
 
     def sendIbCommand(self, command, extra={}):
         newcommand = command.copy()
-        if "reqId" not in newcommand:
+        if command["method_name"] in ["placeOrder"]:
+            pass
+        elif "reqId" not in newcommand:
             newcommand["reqId"] = self.reqId
         self.gui_to_ib.put(newcommand.copy())
         for k, v in extra.items():
@@ -119,6 +124,12 @@ class Controller:
     def reqPositions(self):
         command = {
             "method_name": "reqPositions"
+        }
+        self.sendIbCommand(command)
+
+    def reqOpenOrders(self):
+        command = {
+            "method_name": "reqOpenOrders"
         }
         self.sendIbCommand(command)
 
@@ -227,7 +238,125 @@ class Controller:
         # Final GUI update or summary calculations
         self.finalizePortfolioDisplay()
 
-    
+    def handle_openOrder(self):
+        contract = self.incoming_command["kwargs"].get("contract", None)
+        order = self.incoming_command["kwargs"].get("order", None)
+        orderState = self.incoming_command["kwargs"].get("orderState", None)
+        
+        if contract is None or order is None or orderState is None:
+            return
+        instrument_id = self.get_instrument_id_from_contract(contract)
+        if instrument_id not in self.portfolio:
+            # Create a new portfolio entry for this instrument
+            self.portfolio[instrument_id] = Stub(
+                account="",
+                n=0,
+                avgCost=0.0,
+                contract=contract,
+                premium=None,
+                startdate=None,
+                dirty=True
+            )
+        position = self.portfolio[instrument_id]
+        position.order = order
+        position.orderState = orderState
+        position.dirty = True
+        self.displayer.updatePortfolioDisplay()
+        self.adjust_order(position)
+
+    def handle_orderStatus(self):
+        """
+        there are actually 2 orderStatus objects:
+        position.orderStatus  
+        position.order.orderState  
+        """
+        for position in self.portfolio.values():
+            if hasattr(position, 'order') \
+                    and position.order.permId == self.incoming_command["kwargs"].get("permId", None):
+                position.orderState.status = self.incoming_command["kwargs"].get("status", "")
+                position.dirty = True
+                self.displayer.updatePortfolioDisplay()
+                self.adjust_order(position)
+                break
+        
+
+    def can_adjust_order(self, position):
+
+        if not hasattr(position, 'contract'):
+            return False
+        if position.contract.secType != "OPT":
+            return False
+        if not hasattr(position,'order'):
+            return False
+        if position.n == 0:
+            return False
+        if not hasattr(position, 'orderState'):
+            return False
+        if position.orderState.status in ('Cancelled', 'Filled', 'Inactive'):
+            return False
+        if position.order.action != 'BUY':
+            return False
+
+
+        if position.contract.right != 'P':
+            return False
+        if position.order.lmtPrice is None or position.order.lmtPrice == 0.0:
+            return False
+        if position.closeat is None or position.closeat == 0.0:
+            return False
+        if position.closeat >= position.order.lmtPrice:
+            return False
+        return True        
+
+    def adjust_order(self, position):
+        #return # don't use for now
+        if not self.can_adjust_order(position):
+            return
+        print("CAN ADJUST ORDER", position.order.clientId, position.contract.symbol, position.contract.lastTradeDateOrContractMonth, 
+              position.contract.strike, position.contract.right, position.n, position.closeat, position.order.lmtPrice)
+        
+        new_limit = position.closeat * 0.9
+        new_limit = round(new_limit * 100) / 100
+        if new_limit < 0.15:
+            new_limit = 0.15
+        
+        # Create a NEW order object instead of modifying the existing one
+        from ibapi.order import Order
+        modified_order = Order()
+        
+        # Copy all properties from the original order
+        modified_order.orderId = position.order.orderId
+        modified_order.clientId = 0
+        modified_order.permId = position.order.permId
+        modified_order.action = position.order.action
+        modified_order.totalQuantity = position.order.totalQuantity
+        modified_order.orderType = position.order.orderType
+        modified_order.lmtPrice = new_limit  # ✅ Only change what you need
+        modified_order.tif = getattr(position.order, 'tif', 'GTC')
+        modified_order.eTradeOnly = getattr(position.order, 'eTradeOnly', False)
+        modified_order.firmQuoteOnly = getattr(position.order, 'firmQuoteOnly', False)
+
+  
+        # Copy any other important properties
+        if hasattr(position.order, 'auxPrice'):
+            modified_order.auxPrice = position.order.auxPrice
+        if hasattr(position.order, 'account'):
+            modified_order.account = position.order.account
+        
+        #position.order.lmtPrice = new_limit  # Update the position's limit price for display
+
+        command = {
+            "method_name": "placeOrder",
+            "contract": position.contract,
+            "order": modified_order,  # ✅ Use the new order object
+            "orderId": position.order.orderId
+        }
+        self.sendIbCommand(command)
+        
+        print(f"Modified order {position.order.orderId} from {position.order.lmtPrice} to {new_limit}")
+
+    def handle_openOrderEnd(self):
+        self.finalizePortfolioDisplay()
 
     def finalizePortfolioDisplay(self):
         """Final portfolio display update"""
