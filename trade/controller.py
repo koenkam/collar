@@ -19,6 +19,7 @@ class Controller:
         self.reqId = 1
         self.orderId = 1  # Separate counter for order IDs
         self.requests = OrderedDict()  # Maintain order of requests
+        self.orders = OrderedDict()
         self.conId = None
         self.stats = {}
         self.portfolio = {}
@@ -99,26 +100,33 @@ class Controller:
 
     def sendIbCommand(self, command, extra={}):
         newcommand = command.copy()        
-        if command["method_name"] in ["placeOrder", "cancelOrder"]:
-            if "orderId" not in newcommand:
-                newcommand["orderId"] = self.orderId
-                self.orderId += 1  # Increment orderId for order commands
-        elif "reqId" not in newcommand:
+        if "reqId" not in newcommand:
             newcommand["reqId"] = self.reqId
-            self.reqId += 1  # Increment reqId for other requests
-       
+        
         self.gui_to_ib.put(newcommand.copy())
         for k, v in extra.items():
             newcommand[k] = v
-        # Use the appropriate ID for storing the request
-        request_key = newcommand.get("orderId", newcommand.get("reqId"))
-        self.requests[request_key] = newcommand
+        self.requests[self.reqId] = newcommand
+        self.reqId += 1  
+        self.do_stats(command)
+        
+
+    def sendIbOrder(self, command, extra={}):
+        newcommand = command.copy()     
+        if "orderId" not in newcommand:
+            newcommand["orderId"] = self.orderId
+        self.gui_to_ib.put(newcommand.copy())
+        for k, v in extra.items():
+            newcommand[k] = v
+        self.orders[self.orderId] = newcommand
+        self.do_stats(command)
+
+    def do_stats(self, command):
         if self.stats.get(command["method_name"]) is None:
             self.stats[command["method_name"]] = 0
         self.stats[command["method_name"]] += 1
         if self.reqId % 100 == 0:
             print(self.stats)
-
 
     def cancelStreams(self):
         new_requests = OrderedDict()
@@ -303,6 +311,15 @@ class Controller:
                 #self.adjust_order(position)
                 break
         
+    def handle_cancelOrder(self):
+        for position in self.portfolio.values():
+            if hasattr(position, 'order') \
+                    and position.order.orderId == self.incoming_command["kwargs"].get("orderId", None):
+                position.orderState.status = "Cancelled"
+                position.dirty = True
+                self.displayer.updatePortfolioDisplay()
+                #self.adjust_order(position)
+                break
 
     def can_adjust_order(self, position):
 
@@ -349,7 +366,7 @@ class Controller:
             "method_name": "cancelOrder",
             "orderId": position.order.orderId
         }
-        self.sendIbCommand(command)
+        self.sendIbOrder(command)
 
 
         # Create a NEW order object instead of modifying the existing one
@@ -357,7 +374,7 @@ class Controller:
         
         
         # Copy all properties from the original order
-        modified_order.orderId = 0  # Will be assigned by sendIbCommand
+        modified_order.orderId = 0  # Will be assigned by sendIbOrder
         modified_order.clientId = 0
         modified_order.permId = 0
         modified_order.action = position.order.action
@@ -368,21 +385,14 @@ class Controller:
         modified_order.eTradeOnly = getattr(position.order, 'eTradeOnly', False)
         modified_order.firmQuoteOnly = getattr(position.order, 'firmQuoteOnly', False)
 
-  
-        # Copy any other important properties
-        if hasattr(position.order, 'auxPrice'):
-            modified_order.auxPrice = position.order.auxPrice
-        if hasattr(position.order, 'account'):
-            modified_order.account = position.order.account
         
-        #position.order.lmtPrice = new_limit  # Update the position's limit price for display
 
         command = {
             "method_name": "placeOrder",
             "contract": position.contract,
             "order": modified_order,  # ✅ Use the new order object
         }
-        self.sendIbCommand(command)
+        self.sendIbOrder(command)
         
         print(f"Modified order {modified_order.orderId} from {position.order.lmtPrice} to {new_limit}")
 
@@ -392,4 +402,3 @@ class Controller:
     def finalizePortfolioDisplay(self):
         """Final portfolio display update"""
         pass
-

@@ -33,6 +33,8 @@ class MainFrame(wx.Frame):
         self.Centre()
         #self.controller.getStock(self.txt_stock.GetValue()  )
 
+  
+
     def render_portfolio(self):
         #draw a title "Portfolio" at the top of the window
         hbox0 = wx.BoxSizer(wx.HORIZONTAL)
@@ -67,3 +69,4 @@ class MainFrame(wx.Frame):
 
     def on_timer(self, event):
         self.controller.process_incoming_data()
+
