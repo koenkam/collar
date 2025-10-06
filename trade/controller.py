@@ -350,7 +350,7 @@ class Controller:
         return True        
 
     def adjust_order(self, position):
-        #return # don't use for now
+        return # don't use for now
         if not self.can_adjust_order(position):
             return
         print("CAN ADJUST ORDER", position.order.clientId, position.contract.symbol, position.contract.lastTradeDateOrContractMonth, 
