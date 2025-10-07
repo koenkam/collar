@@ -66,7 +66,7 @@ class Displayer:
             ppd_now = pl /dit
             
             underlying = position.underlyingPrice if hasattr(position, 'underlyingPrice') else ""
-            if underlying and strike and lastPrice != 0.0 and contract.secType == 'OPT':
+            if underlying and strike and contract.secType == 'OPT':
                 assignvalue = -lastPrice * position.n * 100
                 assignvalue += (strike - underlying) * position.n * 100
                 itm_percentage = (underlying - strike) / strike * 100
