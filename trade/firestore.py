@@ -16,39 +16,39 @@ class FirestoreDB:
     def __init__(self, controller):
         self.controller = controller
         self.db = firestore.Client()
-        self.portfolio_ref = self.db.collection('portfolio')
+        self.option_portfolio_ref = self.db.collection('portfolio')
 
     def get_portfolio(self):
-        docs = self.portfolio_ref.stream()
-        self.portfolio = []
+        docs = self.option_portfolio_ref.stream()
+        self.option_portfolio = []
         for doc in docs:
             data = doc.to_dict()
             data['id'] = doc.id
-            self.portfolio.append(data)
-        return self.portfolio
+            self.option_portfolio.append(data)
+        return self.option_portfolio
 
    
     
     def merge_portfolio_item(self, instrument_id):
-        position_doc = self.portfolio_ref.document(instrument_id)
+        position_doc = self.option_portfolio_ref.document(instrument_id)
         doc = position_doc.get()
         if doc.exists:
             position_data = doc.to_dict()
-            self.controller.portfolio[instrument_id].premium = position_data.get('premium')
-            self.controller.portfolio[instrument_id].startdate = position_data.get('startdate')
+            self.controller.option_portfolio[instrument_id].premium = position_data.get('premium')
+            self.controller.option_portfolio[instrument_id].startdate = position_data.get('startdate')
         else:
             # Create new document
             position_data = {
                 'premium': 0,
                 'startdate': datetime.datetime.now().strftime("%Y%m%d"),
-                'symbol': self.controller.portfolio[instrument_id].contract.symbol,
-                'secType': self.controller.portfolio[instrument_id].contract.secType,
-                'right': self.controller.portfolio[instrument_id].contract.right,
-                'strike': self.controller.portfolio[instrument_id].contract.strike,
-                'expiry': self.controller.portfolio[instrument_id].contract.lastTradeDateOrContractMonth,
-                'n': self.controller.portfolio[instrument_id].n,
-                'avgCost': self.controller.portfolio[instrument_id].avgCost,
-                'conId': self.controller.portfolio[instrument_id].contract.conId,
+                'symbol': self.controller.option_portfolio[instrument_id].contract.symbol,
+                'secType': self.controller.option_portfolio[instrument_id].contract.secType,
+                'right': self.controller.option_portfolio[instrument_id].contract.right,
+                'strike': self.controller.option_portfolio[instrument_id].contract.strike,
+                'expiry': self.controller.option_portfolio[instrument_id].contract.lastTradeDateOrContractMonth,
+                'n': self.controller.option_portfolio[instrument_id].n,
+                'avgCost': self.controller.option_portfolio[instrument_id].avgCost,
+                'conId': self.controller.option_portfolio[instrument_id].contract.conId,
                 
             }
             position_doc.set(position_data)

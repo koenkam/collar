@@ -10,7 +10,7 @@ class Displayer:
 
     def adjust_grid(self):
         grid = self.mainframe.grid_portfolio
-        portfolio = self.controller.portfolio
+        portfolio = self.controller.option_portfolio
 
         current_rows = grid.GetNumberRows()
         required_rows = len(portfolio.items())
@@ -22,8 +22,8 @@ class Displayer:
     def updatePortfolioDisplay(self):
         self.adjust_grid()
         grid = self.mainframe.grid_portfolio
-        portfolio = self.controller.portfolio
-        portfolio_gui_map = self.controller.portfolio_gui_map
+        portfolio = self.controller.option_portfolio
+        portfolio_gui_map = self.controller.option_portfolio_gui_map
         
         
         for instrument_id, position in portfolio.items():

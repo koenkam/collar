@@ -22,8 +22,8 @@ class Controller:
         self.orders = OrderedDict()
         self.conId = None
         self.stats = {}
-        self.portfolio = {}
-        self.portfolio_gui_map = {}
+        self.option_portfolio = {}
+        self.option_portfolio_gui_map = {}
         self.mainframe = None  # Will be set by MainFrame
         self.displayer = None
     
@@ -157,7 +157,7 @@ class Controller:
         self.sendIbCommand(command)
 
     def find_underlying_for_stocktick(self, symbol):
-        for instrument_id, position in self.portfolio.items():
+        for instrument_id, position in self.option_portfolio.items():
             contract = position.contract
             if contract.secType == 'OPT' and contract.symbol == symbol:
                 return instrument_id
@@ -172,27 +172,27 @@ class Controller:
         if contract is None:
             return
         if contract.secType == "STK":
-            if instrument_id not in self.portfolio:
+            if instrument_id not in self.option_portfolio:
                 underlying_instrument_id = self.find_underlying_for_stocktick(contract.symbol)
                 if underlying_instrument_id is not None \
                         and "price" in self.incoming_command["kwargs"]:
-                    self.portfolio[underlying_instrument_id].underlyingPrice = self.incoming_command["kwargs"]["price"]
-                    self.portfolio[underlying_instrument_id].dirty = True
+                    self.option_portfolio[underlying_instrument_id].underlyingPrice = self.incoming_command["kwargs"]["price"]
+                    self.option_portfolio[underlying_instrument_id].dirty = True
                     self.displayer.updatePortfolioDisplay()
                     return
                 
             if "price" in self.incoming_command["kwargs"]:
                 price = self.incoming_command["kwargs"]["price"]
-                self.portfolio[instrument_id].lastPrice = price
-                self.portfolio[instrument_id].dirty = True
+                self.option_portfolio[instrument_id].lastPrice = price
+                self.option_portfolio[instrument_id].dirty = True
                 self.displayer.updatePortfolioDisplay()
             return
         #if contract.conId == 808931954:  # AMD
         #    print("AMD tickPrice", self.incoming_command)
         if self.incoming_command["kwargs"].get("tickType") in (1,2,4): 
             price = self.incoming_command["kwargs"]["price"]
-            self.portfolio[instrument_id].lastPrice = price
-            self.portfolio[instrument_id].dirty = True
+            self.option_portfolio[instrument_id].lastPrice = price
+            self.option_portfolio[instrument_id].dirty = True
             self.displayer.updatePortfolioDisplay()
 
     def handle_tickOptionComputation(self):
@@ -204,13 +204,13 @@ class Controller:
         contract = request.get("contract", None)
         if contract is None:
             return
-        self.portfolio[instrument_id].impliedVol = self.incoming_command["kwargs"].get("impliedVol", None)
-        self.portfolio[instrument_id].delta = self.incoming_command["kwargs"].get("delta", None)
-        self.portfolio[instrument_id].gamma = self.incoming_command["kwargs"].get("gamma", None)
-        self.portfolio[instrument_id].theta = self.incoming_command["kwargs"].get("theta", None)
-        self.portfolio[instrument_id].vega = self.incoming_command["kwargs"].get("vega", None)
-        self.portfolio[instrument_id].optPrice = self.incoming_command["kwargs"].get("optPrice", None)
-        self.portfolio[instrument_id].dirty = True
+        self.option_portfolio[instrument_id].impliedVol = self.incoming_command["kwargs"].get("impliedVol", None)
+        self.option_portfolio[instrument_id].delta = self.incoming_command["kwargs"].get("delta", None)
+        self.option_portfolio[instrument_id].gamma = self.incoming_command["kwargs"].get("gamma", None)
+        self.option_portfolio[instrument_id].theta = self.incoming_command["kwargs"].get("theta", None)
+        self.option_portfolio[instrument_id].vega = self.incoming_command["kwargs"].get("vega", None)
+        self.option_portfolio[instrument_id].optPrice = self.incoming_command["kwargs"].get("optPrice", None)
+        self.option_portfolio[instrument_id].dirty = True
         self.displayer.updatePortfolioDisplay()
 
     def handle_position(self):
@@ -225,7 +225,7 @@ class Controller:
         avgCost = self.incoming_command["kwargs"].get("avgCost", 0.0)
         
         instrument_id = self.get_instrument_id_from_contract(contract)
-        self.portfolio[instrument_id] = Stub(
+        self.option_portfolio[instrument_id] = Stub(
             account=account,
             n=n,
             avgCost=avgCost,
@@ -278,9 +278,9 @@ class Controller:
         if contract is None or order is None or orderState is None:
             return
         instrument_id = self.get_instrument_id_from_contract(contract)
-        if instrument_id not in self.portfolio:
+        if instrument_id not in self.option_portfolio:
             # Create a new portfolio entry for this instrument
-            self.portfolio[instrument_id] = Stub(
+            self.option_portfolio[instrument_id] = Stub(
                 account="",
                 n=0,
                 avgCost=0.0,
@@ -289,7 +289,7 @@ class Controller:
                 startdate=None,
                 dirty=True
             )
-        position = self.portfolio[instrument_id]
+        position = self.option_portfolio[instrument_id]
         position.order = order
         position.orderState = orderState
         position.dirty = True
@@ -302,7 +302,7 @@ class Controller:
         position.orderStatus  
         position.order.orderState  
         """
-        for position in self.portfolio.values():
+        for position in self.option_portfolio.values():
             if hasattr(position, 'order') \
                     and position.order.permId == self.incoming_command["kwargs"].get("permId", None):
                 position.orderState.status = self.incoming_command["kwargs"].get("status", "")
@@ -312,7 +312,7 @@ class Controller:
                 break
         
     def handle_cancelOrder(self):
-        for position in self.portfolio.values():
+        for position in self.option_portfolio.values():
             if hasattr(position, 'order') \
                     and position.order.orderId == self.incoming_command["kwargs"].get("orderId", None):
                 position.orderState.status = "Cancelled"
