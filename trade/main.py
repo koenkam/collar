@@ -28,17 +28,16 @@ class MainFrame(wx.Frame):
         self.vbox = wx.BoxSizer(wx.VERTICAL)
         
         self.render_portfolio()
-        #self.render_dash()
+        self.render_stock()
+
         self.panel.SetSizer(self.vbox)
         self.Centre()
-        #self.controller.getStock(self.txt_stock.GetValue()  )
 
   
 
     def render_portfolio(self):
-        #draw a title "Portfolio" at the top of the window
         hbox0 = wx.BoxSizer(wx.HORIZONTAL)
-        lbl_portfolio = wx.StaticText(self.panel, label='Portfolio')
+        lbl_portfolio = wx.StaticText(self.panel, label='Options')
         hbox0.Add(lbl_portfolio, flag=wx.RIGHT, border=8)        
         self.grid_portfolio = wx.grid.Grid(self.panel)
         self.grid_portfolio.CreateGrid(5, len(c.portfolio_labels))
@@ -56,6 +55,21 @@ class MainFrame(wx.Frame):
         self.vbox.Add(hbox0, flag=wx.EXPAND|wx.LEFT|wx.RIGHT|wx.TOP, border=10)
         self.vbox.Add(self.grid_portfolio, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
 
+    def render_stock(self):
+        lbl_stock = wx.StaticText(self.panel, label='Stock')
+        self.grid_stock = wx.grid.Grid(self.panel)
+        self.grid_stock.CreateGrid(5, len(c.stock_labels))
+        for col, label in enumerate(c.stock_labels):
+            self.grid_stock.SetColLabelValue(col, label)
+            if label in c.stock_columns_left:
+                attr = wx.grid.GridCellAttr()
+                attr.SetAlignment(wx.ALIGN_LEFT, wx.ALIGN_CENTER)
+                self.grid_stock.SetColAttr(col, attr)
+            else:
+                self.grid_stock.SetColFormatNumber(col)
+        #add all elements to self.vbox
+        self.vbox.Add(lbl_stock, flag=wx.LEFT, border=8)
+        self.vbox.Add(self.grid_stock, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
 
 
     def on_stock_selected(self, event):

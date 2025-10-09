@@ -8,9 +8,7 @@ class Displayer:
         self.controller = controller
         self.mainframe = controller.mainframe
 
-    def adjust_grid(self):
-        grid = self.mainframe.grid_portfolio
-        portfolio = self.controller.option_portfolio
+    def adjust_grid(self, grid, portfolio):
 
         current_rows = grid.GetNumberRows()
         required_rows = len(portfolio.items())
@@ -20,7 +18,55 @@ class Displayer:
             grid.DeleteRows(0, current_rows - required_rows)
 
     def updatePortfolioDisplay(self):
-        self.adjust_grid()
+        self.adjust_grid(self.mainframe.grid_portfolio,self.controller.option_portfolio)
+        self.adjust_grid(self.mainframe.grid_stock,self.controller.stock_portfolio)
+        self.update_option_display()
+        self.update_stock_display()
+
+    def update_stock_display(self):
+        grid = self.mainframe.grid_stock
+        portfolio = self.controller.stock_portfolio
+        portfolio_gui_map = self.controller.stock_portfolio_gui_map
+        
+        for instrument_id, position in portfolio.items():
+            if not position.dirty:
+                pass
+            position.dirty = False
+            contract = position.contract
+            if instrument_id in portfolio_gui_map:
+                row = portfolio_gui_map[instrument_id]
+            else:
+                row = max(portfolio_gui_map.values(), default=-1) + 1
+                portfolio_gui_map[instrument_id] = row
+            
+            lastPrice = position.lastPrice if hasattr(position, 'lastPrice') and position.lastPrice is not None and position.lastPrice >= 0 else 0.0
+            pl = (lastPrice - position.avgCost) * position.n if hasattr(position, 'avgCost') and position.avgCost is not None else 0.0
+
+            output = [
+                contract.symbol,
+                position.n,
+                position.avgCost,
+                lastPrice,
+                pl
+            ]
+            display_list = []
+            for i, value in enumerate(output):
+                if type(value) in [float, int]:
+                    if int(value) == value:
+                        display_list.append(f"{int(value)}")
+                    else:
+                        display_list.append(f"{value:.2f}")
+                elif value is None:
+                    display_list.append("")
+                else:
+                    display_list.append(str(value))
+
+            for col, value in enumerate(display_list):
+                grid.SetCellValue(row, col, value)
+                
+        grid.AutoSizeColumns()  
+
+    def update_option_display(self):
         grid = self.mainframe.grid_portfolio
         portfolio = self.controller.option_portfolio
         portfolio_gui_map = self.controller.option_portfolio_gui_map

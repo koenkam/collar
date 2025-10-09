@@ -7,11 +7,13 @@ from config import create_c
 #from experiments import option
 c = create_c()
 from .firestore import FirestoreDB
+from .sheetstofirestore import sheets_to_firestore
 from util import Stub
 
 class Controller:
 
     def __init__(self, gui_to_ib, ib_to_gui):
+        sheets_to_firestore()
         self.ib_to_gui = ib_to_gui
         self.gui_to_ib = gui_to_ib
         self.firestore = FirestoreDB(self)
@@ -24,6 +26,8 @@ class Controller:
         self.stats = {}
         self.option_portfolio = {}
         self.option_portfolio_gui_map = {}
+        self.stock_portfolio = {}
+        self.stock_portfolio_gui_map = {}
         self.mainframe = None  # Will be set by MainFrame
         self.displayer = None
     
@@ -144,6 +148,8 @@ class Controller:
         for cancel_command in cancel_commands:
             self.sendIbCommand(cancel_command)
 
+  
+
     def reqPositions(self):
         command = {
             "method_name": "reqPositions"
@@ -156,7 +162,7 @@ class Controller:
         }
         self.sendIbCommand(command)
 
-    def find_underlying_for_stocktick(self, symbol):
+    def find_option_id_for_stocktick(self, symbol):
         for instrument_id, position in self.option_portfolio.items():
             contract = position.contract
             if contract.secType == 'OPT' and contract.symbol == symbol:
@@ -164,36 +170,49 @@ class Controller:
         return None
 
     def handle_tickPrice(self):        
-        instrument_id = self.get_instrument_id_from_request(self.incoming_command["kwargs"]["reqId"])
+        instrument_id = self.get_instrument_id_from_request(self.incoming_command["kwargs"]["reqId"])        
         request = self.requests.get(self.incoming_command["kwargs"]["reqId"])
         if request is None:
             return
         contract = request.get("contract", None)
         if contract is None:
             return
+        
+        price = self.incoming_command["kwargs"].get("price")
+        if price is None or price <= 0:
+            return
+            
+        option_id = self.find_option_id_for_stocktick(contract.symbol)
+        
         if contract.secType == "STK":
-            if instrument_id not in self.option_portfolio:
-                underlying_instrument_id = self.find_underlying_for_stocktick(contract.symbol)
-                if underlying_instrument_id is not None \
-                        and "price" in self.incoming_command["kwargs"]:
-                    self.option_portfolio[underlying_instrument_id].underlyingPrice = self.incoming_command["kwargs"]["price"]
-                    self.option_portfolio[underlying_instrument_id].dirty = True
-                    self.displayer.updatePortfolioDisplay()
-                    return
-                
-            if "price" in self.incoming_command["kwargs"]:
-                price = self.incoming_command["kwargs"]["price"]
-                self.option_portfolio[instrument_id].lastPrice = price
-                self.option_portfolio[instrument_id].dirty = True
+            # Handle stock price updates
+            if option_id and option_id in self.option_portfolio:
+                # Update underlying price for option
+                if not hasattr(self.option_portfolio[option_id], 'underlyingPrice'):
+                    self.option_portfolio[option_id].underlyingPrice = None
+                self.option_portfolio[option_id].underlyingPrice = price
+                self.option_portfolio[option_id].dirty = True
+                self.displayer.updatePortfolioDisplay()
+                return
+            
+            # Update stock position if it exists
+            if instrument_id in self.stock_portfolio:
+                if not hasattr(self.stock_portfolio[instrument_id], 'lastPrice'):
+                    self.stock_portfolio[instrument_id].lastPrice = None
+                self.stock_portfolio[instrument_id].lastPrice = price
+                self.stock_portfolio[instrument_id].dirty = True
                 self.displayer.updatePortfolioDisplay()
             return
-        #if contract.conId == 808931954:  # AMD
-        #    print("AMD tickPrice", self.incoming_command)
-        if self.incoming_command["kwargs"].get("tickType") in (1,2,4): 
-            price = self.incoming_command["kwargs"]["price"]
-            self.option_portfolio[instrument_id].lastPrice = price
-            self.option_portfolio[instrument_id].dirty = True
-            self.displayer.updatePortfolioDisplay()
+            
+        # Handle option price updates
+        if contract.secType == "OPT":
+            if self.incoming_command["kwargs"].get("tickType") in (1, 2, 4): 
+                if instrument_id in self.option_portfolio:
+                    if not hasattr(self.option_portfolio[instrument_id], 'lastPrice'):
+                        self.option_portfolio[instrument_id].lastPrice = None
+                    self.option_portfolio[instrument_id].lastPrice = price
+                    self.option_portfolio[instrument_id].dirty = True
+                    self.displayer.updatePortfolioDisplay()
 
     def handle_tickOptionComputation(self):
         reqId = self.incoming_command["kwargs"]["reqId"]
@@ -215,56 +234,71 @@ class Controller:
 
     def handle_position(self):
         """Handle individual position updates"""
-        account = self.incoming_command["kwargs"].get("account", "")
-        contract = self.incoming_command["kwargs"].get("contract", {})
-        n = self.incoming_command["kwargs"].get("position", 0.0)
-        if n == 0:
+        self.account = self.incoming_command["kwargs"].get("account", "")
+        self.contract = self.incoming_command["kwargs"].get("contract", {})
+        self.n = self.incoming_command["kwargs"].get("position", 0.0)
+        if self.n == 0:
             return
-        if contract.symbol == "SPX":
+        if self.contract.symbol == "SPX":
             return
-        avgCost = self.incoming_command["kwargs"].get("avgCost", 0.0)
-        
-        instrument_id = self.get_instrument_id_from_contract(contract)
-        self.option_portfolio[instrument_id] = Stub(
-            account=account,
-            n=n,
-            avgCost=avgCost,
-            contract=contract,
-            premium=None,
-            startdate=None,
-            dirty=True
-        )
-        self.firestore.merge_portfolio_item(instrument_id)
-        
+        self.avgCost = self.incoming_command["kwargs"].get("avgCost", 0.0)
+        self.instrument_id = self.get_instrument_id_from_contract(self.contract)
+        if self.contract.secType == "OPT":
+            self.handle_postion_option()
+        elif self.contract.secType == "STK":
+            self.handle_position_stock()
+
+    def handle_position_stock(self):
+        self.stock_portfolio[self.instrument_id] = Stub(
+                account=self.account,
+                n=self.n,
+                avgCost=self.avgCost,
+                contract=self.contract,
+                dirty=True
+            )
+        self.displayer.updatePortfolioDisplay()
+        self.contract.exchange = c.default_exchange
+        self.firestore.merge_stock_item(self.instrument_id)
+
+    def handle_postion_option(self):
+        self.option_portfolio[self.instrument_id] = Stub(
+                account=self.account,
+                n=self.n,
+                avgCost=self.avgCost,
+                contract=self.contract,
+                premium=None,
+                startdate=None,
+                dirty=True
+            )
+        self.firestore.merge_portfolio_item(self.instrument_id)
+            
         # Update GUI portfolio display
         self.displayer.updatePortfolioDisplay()
 
-        contract.exchange = c.default_exchange
+        self.contract.exchange = c.default_exchange
         command = {
             "method_name": "reqMktData",
-            "contract": contract,
+            "contract": self.contract,
             "genericTickList": "",
             "snapshot": False,
             "regulatorySnapshot": False,
             "mktDataOptions": []
         }
         self.sendIbCommand(command)
-        if contract.secType == "OPT":
-            stock_contract = Contract()
-            stock_contract.symbol = contract.symbol
-            stock_contract.secType = "STK"
-            stock_contract.currency = contract.currency
-            stock_contract.exchange = c.default_exchange
-            stock_command = {
-                "method_name": "reqMktData",
-                "contract": stock_contract,
-                "genericTickList": "",
-                "snapshot": False,
-                "regulatorySnapshot": False,
-                "mktDataOptions": []
-            }
-            self.sendIbCommand(stock_command)
-
+        stock_contract = Contract()
+        stock_contract.symbol = self.contract.symbol
+        stock_contract.secType = "STK"
+        stock_contract.currency = self.contract.currency
+        stock_contract.exchange = c.default_exchange
+        stock_command = {
+            "method_name": "reqMktData",
+            "contract": stock_contract,
+            "genericTickList": "",
+            "snapshot": False,
+            "regulatorySnapshot": False,
+            "mktDataOptions": []
+        }
+        self.sendIbCommand(stock_command)
 
     def handle_positionEnd(self):
         # Final GUI update or summary calculations

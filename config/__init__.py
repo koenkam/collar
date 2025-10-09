@@ -4,6 +4,7 @@ import os
 
 
 def general(c):
+    c.scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     return c
 
 def find_project_root(start_path=None):
@@ -30,10 +31,13 @@ def gui(c):
     c.portfolio_labels += ["Assign", "Close@", "Order", "Order_n", "Order_lim"]
     c.portfolio_columns_left = ["Symbol", "Type"]
     c.itm_threshold = 2.0  # ITM% threshold to consider option ITM
+    c.stock_labels = ["Symbol", "N", "Buy","Last", "Profit"]
+    c.stock_columns_left = ["Symbol"]
     return c
 
 def path(c):
     c.project_root = find_project_root()
+    c.credentials_path = os.path.join('/Users/koenkam/code/keys', 'autobalance-40f29-599eaad48e9f.json')
     return c
 
 def wheel(c):

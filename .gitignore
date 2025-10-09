@@ -10,3 +10,11 @@ ENV/
 env.bak/
 venv.bak/
 
+# Credential files and secrets
+*.json
+keys/
+credentials.json
+*credentials*
+*.key
+*.pem
+

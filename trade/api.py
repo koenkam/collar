@@ -57,6 +57,7 @@ class IBApi(EWrapper, EClient):
     
     def reqOpenOrders(self, *args, **kwargs ):
         return super().reqOpenOrders()
+    
         
     def _execute_command(self):
         """Execute IB API commands - pure generic dispatcher"""
@@ -157,6 +158,14 @@ class IBApi(EWrapper, EClient):
     @auto_queue
     def cancelOrder(self, orderId: OrderId):
         super().cancelOrder(orderId)
+
+    def reqMktDataDelayed(self, reqId: TickerId, contract: Contract,
+                          genericTickList: str, snapshot: bool,
+                          regulatorySnapshot: bool, mktDataOptions: list):
+        self.reqMarketDataType(4)  # 1 = real-time, 2 = frozen, 3 = delayed, 4 = delayed-frozen
+        super().reqMktData(reqId, contract, genericTickList, snapshot,
+                           regulatorySnapshot, mktDataOptions)
+        self.reqMarketDataType(1)
 
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=''):
         if reqId == -1:
