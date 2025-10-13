@@ -49,6 +49,16 @@ class Controller:
         instrument_key = "_".join(map(str, finstrument_key_list))
         return instrument_key
     
+    def get_instrument_id_from_grid_row(self, row):
+        portfolio_gui_map = getattr(self, 'option_portfolio_gui_map', {})
+        for instr_id, grid_row in portfolio_gui_map.items():
+            if grid_row == row:
+                return instr_id
+        stock_gui_map = getattr(self, 'stock_portfolio_gui_map', {})
+        for instr_id, grid_row in stock_gui_map.items():
+            if grid_row == row:
+                return instr_id
+        return None
 
     def get_instrument_id_from_request(self, reqId):
         request = self.requests.get(reqId)
