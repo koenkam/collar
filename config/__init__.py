@@ -37,7 +37,7 @@ def gui(c):
 
 def path(c):
     c.project_root = find_project_root()
-    c.credentials_path = os.path.join('/Users/koenkam/code/keys', 'autobalance-40f29-599eaad48e9f.json')
+    c.credentials_path = os.path.join('/Users/koenkam/code/secrets', 'autobalance-40f29-599eaad48e9f.json')
     return c
 
 def wheel(c):
