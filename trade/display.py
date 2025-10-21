@@ -160,15 +160,21 @@ class Displayer:
             ]
             display_list = []
             for i, value in enumerate(output):
-                if type(value) in [float, int]:
-                    if int(value) == value:
-                        display_list.append(f"{int(value)}")
-                    else:
-                        display_list.append(f"{value:.2f}")
-                elif value is None:
-                    display_list.append("")
+                column_label = c.portfolio_labels[i]
+                if column_label in c.portfolio_float_columns:
+                    try:
+                        cell = f"{float(value):.2f}"
+                    except (ValueError, TypeError):
+                        cell = ""
+                elif column_label in c.portfolio_int_columns:
+                    try:
+                        cell = f"{int(float(value))}"
+                    except (ValueError, TypeError):
+                        cell = ""
                 else:
-                    display_list.append(str(value))
+                    cell = str(value)
+
+                display_list.append(cell)
 
             for col, value in enumerate(display_list):
                 grid.SetCellValue(row, col, value)

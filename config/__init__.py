@@ -29,6 +29,10 @@ def gui(c):
                 "PPD",
                 "PPD_NOW"]
     c.portfolio_labels += ["Assign", "Close@", "Order", "Order_n", "Order_lim"]
+    c.portfolio_float_columns = ["Strike", "Underlying", "ITM%", "Premium", 
+                                 "Last", "Buyback", "PL", "PPD", "PPD_NOW", "Assign",
+                                  "Close@", "Order_lim"]
+    c.portfolio_int_columns = ["N", "Days", "DIT", "DTE", "Order_n"]
     c.portfolio_columns_left = ["Symbol", "Type"]
     c.itm_threshold = 2.0  # ITM% threshold to consider option ITM
     c.stock_labels = ["Symbol", "N", "Buy","Last", "Profit"]
