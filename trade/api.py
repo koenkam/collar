@@ -54,6 +54,9 @@ class IBApi(EWrapper, EClient):
     def reqPositions(self, *args, **kwargs):
         super().reqPositions()
 
+    def reqCurrentTime(self, *args, **kwargs ):
+        return super().reqCurrentTime()
+
     
     def reqOpenOrders(self, *args, **kwargs ):
         return super().reqOpenOrders()
@@ -134,6 +137,11 @@ class IBApi(EWrapper, EClient):
         super().position(account, contract, position, avgCost)
         return  
 
+    @auto_queue
+    def currentTime(self, time):
+        return super().currentTime(time)
+
+    
     @auto_queue
     def positionEnd(self):
         return

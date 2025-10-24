@@ -272,4 +272,5 @@ class MainFrame(wx.Frame):
 
     def on_timer(self, event):
         self.controller.process_incoming_data()
-
+        status = self.controller.get_connection_status()        
+        self.SetTitle(f"The Collar - {status}")

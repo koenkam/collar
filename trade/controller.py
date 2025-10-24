@@ -31,9 +31,25 @@ class Controller:
         self.mainframe = None  # Will be set by MainFrame
         self.displayer = None
     
+    def get_connection_status(self):
+        if not hasattr(self, 'last_successful_connection'):
+            self.check_if_connection_alive()
+            return "Unknown"
+        
+        time_since_last = time.time() - self.last_successful_connection        
+        if time_since_last > 5:
+            self.check_if_connection_alive()
+        if time_since_last < 10:
+            return "✅ Connected" 
+        elif time_since_last < 30:
+            return "⚠️ Warning"
+        else:
+            return "❌ Disconnected"
+
     def start(self):
         self.reqPositions()
         self.reqOpenOrders()
+
 
     def get_instrument_id_from_contract(self, contract):
         
@@ -69,8 +85,24 @@ class Controller:
             return ""
         return self.get_instrument_id_from_contract(contract)
 
+    def check_if_connection_alive(self):
+        """Check if the IB connection is still alive by requesting current time"""
+        try:
+            command = {
+                "method_name": "reqCurrentTime"
+            }
+            self.sendIbCommand(command)            
+            self.last_connection_check = time.time()
+            
+            
+        except Exception as e:
+            print(f"Error checking connection: {e}")
+            return False
 
-
+    def handle_currentTime(self):
+        self.last_successful_connection = time.time()
+    
+    
     def process_incoming_data(self):
         while not self.ib_to_gui.empty():
 
@@ -78,7 +110,7 @@ class Controller:
 
             if self.incoming_command["type"] in ['command_result', 'error']:
                 return
-            if self.incoming_command["type"] in ['position', 'positionEnd', 'openOrder', 'openOrderEnd']:
+            if self.incoming_command["type"] in ['position', 'positionEnd', 'openOrder', 'openOrderEnd', 'currentTime']:
                 handler = getattr(self, f"handle_{self.incoming_command['type']}")
                 handler()
                 continue
@@ -139,8 +171,6 @@ class Controller:
         if self.stats.get(command["method_name"]) is None:
             self.stats[command["method_name"]] = 0
         self.stats[command["method_name"]] += 1
-        if self.reqId % 100 == 0:
-            print(self.stats)
 
     def cancelStreams(self):
         new_requests = OrderedDict()
@@ -394,10 +424,11 @@ class Controller:
         return True        
 
     def adjust_order(self, position):
-        return # don't use for now
+        """Adjust an existing order"""
         if not self.can_adjust_order(position):
             return
-        print("CAN ADJUST ORDER", position.order.clientId, position.contract.symbol, position.contract.lastTradeDateOrContractMonth, 
+        
+        print("CAN ADJUST ORDER", position.contract.symbol, position.contract.lastTradeDateOrContractMonth, 
               position.contract.strike, position.contract.right, position.n, position.closeat, position.order.lmtPrice)
         
         new_limit = position.closeat * 0.9
@@ -405,44 +436,43 @@ class Controller:
         if new_limit < 0.15:
             new_limit = 0.15
         
-        #delete the existing order and place a new one
-        command = {
-            "method_name": "cancelOrder",
-            "orderId": position.order.orderId
-        }
-        self.sendIbOrder(command)
-
-
-        # Create a NEW order object instead of modifying the existing one
+        # Create a NEW order object with only TWS-compatible properties
+        from ibapi.order import Order
         modified_order = Order()
         
-        
-        # Copy all properties from the original order
-        modified_order.orderId = 0  # Will be assigned by sendIbOrder
-        modified_order.clientId = 0
-        modified_order.permId = 0
+        # Copy only essential properties
         modified_order.action = position.order.action
         modified_order.totalQuantity = position.order.totalQuantity
         modified_order.orderType = position.order.orderType
-        modified_order.lmtPrice = new_limit  # ✅ Only change what you need
+        modified_order.lmtPrice = new_limit
         modified_order.tif = getattr(position.order, 'tif', 'GTC')
-        modified_order.eTradeOnly = getattr(position.order, 'eTradeOnly', False)
-        modified_order.firmQuoteOnly = getattr(position.order, 'firmQuoteOnly', False)
-
         
+        # Only copy safe, standard properties if they exist
+        if hasattr(position.order, 'auxPrice') and position.order.auxPrice:
+            modified_order.auxPrice = position.order.auxPrice
+        if hasattr(position.order, 'account') and position.order.account:
+            modified_order.account = position.order.account
 
         command = {
             "method_name": "placeOrder",
             "contract": position.contract,
-            "order": modified_order,  # ✅ Use the new order object
+            "order": modified_order,
+            "orderId": position.order.orderId
         }
-        self.sendIbOrder(command)
         
-        print(f"Modified order {modified_order.orderId} from {position.order.lmtPrice} to {new_limit}")
-
-    def handle_openOrderEnd(self):
-        self.finalizePortfolioDisplay()
+        self.sendIbCommand(command)
+        
+        # Update the position's order for display AFTER sending the command
+        position.order.lmtPrice = new_limit
+        
+        print(f"Modified order {position.order.orderId} from {position.order.lmtPrice} to {new_limit}")
 
     def finalizePortfolioDisplay(self):
         """Final portfolio display update"""
-        pass
+        if hasattr(self, 'displayer') and self.displayer:
+            self.displayer.updatePortfolioDisplay()
+
+    def handle_openOrderEnd(self):
+        """Handle end of open orders from IB"""
+        print("Received openOrderEnd - all open orders processed")
+        self.finalizePortfolioDisplay()
