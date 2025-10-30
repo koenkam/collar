@@ -396,6 +396,7 @@ class Controller:
                 break
 
     def can_adjust_order(self, position):
+        return False
 
         if not hasattr(position, 'contract'):
             return False

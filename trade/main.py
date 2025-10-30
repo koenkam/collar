@@ -2,6 +2,8 @@ import wx
 import wx.grid
 import threading
 import queue
+from datetime import datetime
+import pytz
 from .api import IBApi
 from config import create_c
 from .controller import Controller
@@ -127,11 +129,58 @@ class MainFrame(wx.Frame):
         self.panel = wx.Panel(self)
         self.vbox = wx.BoxSizer(wx.VERTICAL)
         
+        # Add time display panel at the top
+        self.render_time_display()
+        
         self.render_portfolio()
         self.render_stock()
 
         self.panel.SetSizer(self.vbox)
         self.Centre()
+
+    def render_time_display(self):
+        """Create and add the time display panel"""
+        # Create a horizontal box for time display
+        time_hbox = wx.BoxSizer(wx.HORIZONTAL)
+        
+        # Create static text for time display
+        self.time_label = wx.StaticText(self.panel, label="US Eastern Time: ")
+        self.time_display = wx.StaticText(self.panel, label="Loading...")
+        
+        # Style the time display
+        font = self.time_display.GetFont()
+        font.SetWeight(wx.FONTWEIGHT_BOLD)
+        font.SetPointSize(12)
+        self.time_display.SetFont(font)
+        self.time_display.SetForegroundColour(wx.Colour(0, 255, 0))
+        
+        # Add to horizontal sizer
+        time_hbox.Add(self.time_label, flag=wx.ALIGN_CENTER_VERTICAL)
+        time_hbox.Add(self.time_display, flag=wx.ALIGN_CENTER_VERTICAL)
+        
+        # Add spacer to push time to the right
+        time_hbox.AddStretchSpacer()
+        
+        # Add to main vertical sizer
+        self.vbox.Add(time_hbox, flag=wx.EXPAND|wx.ALL, border=10)
+        
+        # Update time display immediately
+        self.update_time_display()
+
+    def update_time_display(self):
+        """Update the time display with current Eastern time"""
+        try:
+            # Get current time in Eastern timezone
+            eastern = pytz.timezone('US/Eastern')
+            now = datetime.now(eastern)
+            
+            # Format as "Monday, October 30, 2025 - 3:45:30 PM EDT"
+            time_str = now.strftime("%A, %B %d, %Y - %I:%M:%S %p %Z")
+            
+            # Update the display
+            self.time_display.SetLabel(time_str)
+        except Exception as e:
+            self.time_display.SetLabel("Time Error")
 
     def render_portfolio(self):
         hbox0 = wx.BoxSizer(wx.HORIZONTAL)
@@ -274,3 +323,6 @@ class MainFrame(wx.Frame):
         self.controller.process_incoming_data()
         status = self.controller.get_connection_status()        
         self.SetTitle(f"The Collar - {status}")
+        
+        # Update time display
+        self.update_time_display()
