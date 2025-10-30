@@ -174,8 +174,8 @@ class MainFrame(wx.Frame):
             eastern = pytz.timezone('US/Eastern')
             now = datetime.now(eastern)
             
-            # Format as "Monday, October 30, 2025 - 3:45:30 PM EDT"
-            time_str = now.strftime("%A, %B %d, %Y - %I:%M:%S %p %Z")
+            # Format as "Monday, October 30, 2025 - 15:45:30 EDT"
+            time_str = now.strftime("%A, %B %d, %Y - %H:%M:%S %Z")
             
             # Update the display
             self.time_display.SetLabel(time_str)
