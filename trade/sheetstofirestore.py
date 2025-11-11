@@ -10,9 +10,13 @@ def sheets_to_firestore():
     excel_creds = ServiceAccountCredentials.from_json_keyfile_name(c.credentials_path, c.scope)
     client = gspread.authorize(excel_creds)
     sheet = client.open("FXA").worksheet('lazy')
-    US03price = float(sheet.get('A1')[0][0].replace(',','.'))
-    ERPDprice = float(sheet.get('A2')[0][0].replace(',','.'))
-    print(f"US03price: {US03price}, ERPDprice: {ERPDprice}")
+    try:
+        US03price = float(sheet.get('A1')[0][0].replace(',','.'))
+        ERPDprice = float(sheet.get('A2')[0][0].replace(',','.'))
+        print(f"US03price: {US03price}, ERPDprice: {ERPDprice}")
+    except Exception as e:
+        print(f"Error retrieving prices from sheet: {e}")
+        return
     db = firestore.Client()
     ref = db.collection('portfolio')
     #get the doc with pk 'STK_US03' and put all values in a dict
