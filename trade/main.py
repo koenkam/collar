@@ -2,6 +2,7 @@ import wx
 import wx.grid
 import threading
 import queue
+import time
 from datetime import datetime
 import pytz
 from .api import IBApi
@@ -111,6 +112,96 @@ class EditPositionDialog(wx.Dialog):
         except ValueError:
             return None, None
 
+class EditStockDialog(wx.Dialog):
+    def __init__(self, parent, controller, symbol="", instrument_id="", avg_cost=""):
+        super().__init__(parent, title="Edit Stock Position", size=(400, 180))
+        
+        self.controller = controller
+        self.symbol = symbol
+        self.instrument_id = instrument_id
+        self.avg_cost = avg_cost
+        
+        self.init_ui()
+        
+    def init_ui(self):
+        panel = wx.Panel(self)
+        vbox = wx.BoxSizer(wx.VERTICAL)
+        
+        # Symbol label
+        lbl_symbol = wx.StaticText(panel, label=f"Symbol: {self.symbol}")
+        font = lbl_symbol.GetFont()
+        font.SetWeight(wx.FONTWEIGHT_BOLD)
+        lbl_symbol.SetFont(font)
+        
+        # Instrument ID as copyable text control
+        hbox_id = wx.BoxSizer(wx.HORIZONTAL)
+        lbl_id = wx.StaticText(panel, label="Instrument ID:")
+        self.txt_instrument_id = wx.TextCtrl(panel, value=str(self.instrument_id), 
+                                           style=wx.TE_READONLY)
+        self.txt_instrument_id.SetBackgroundColour(wx.Colour(0, 0, 0))      # Black background
+        self.txt_instrument_id.SetForegroundColour(wx.Colour(255, 255, 255)) # White text
+        hbox_id.Add(lbl_id, flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=8)
+        hbox_id.Add(self.txt_instrument_id, proportion=1)
+        
+        # Avg Cost input
+        hbox2 = wx.BoxSizer(wx.HORIZONTAL)
+        lbl_cost = wx.StaticText(panel, label="Buy Price:")
+        self.txt_cost = wx.TextCtrl(panel, value=str(self.avg_cost))
+        hbox2.Add(lbl_cost, flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=8)
+        hbox2.Add(self.txt_cost, proportion=1)
+        
+        # Buttons
+        hbox3 = wx.BoxSizer(wx.HORIZONTAL)
+        btn_cancel = wx.Button(panel, wx.ID_CANCEL, "Cancel")
+        btn_save = wx.Button(panel, wx.ID_OK, "Save")
+        
+        # Bind save button event
+        btn_save.Bind(wx.EVT_BUTTON, self.on_save)
+        
+        hbox3.Add(btn_cancel, flag=wx.RIGHT, border=5)
+        hbox3.Add(btn_save)
+        
+        # Add all to main sizer
+        vbox.Add(lbl_symbol, flag=wx.EXPAND | wx.ALL, border=10)
+        vbox.Add(hbox_id, flag=wx.EXPAND | wx.ALL, border=10)
+        vbox.Add(hbox2, flag=wx.EXPAND | wx.ALL, border=10)
+        vbox.Add(hbox3, flag=wx.ALIGN_RIGHT | wx.ALL, border=10)
+        
+        panel.SetSizer(vbox)
+    
+    def on_save(self, event):
+        """Handle save button click"""
+        avg_cost = self.txt_cost.GetValue().strip()
+        
+        # Validate avg cost
+        try:
+            if avg_cost:
+                float(avg_cost)  # Test if it's a valid number
+        except ValueError:
+            wx.MessageBox("Buy Price must be a valid number", "Invalid Input", wx.OK | wx.ICON_ERROR)
+            return
+        
+        # Save to Firestore
+        success = self.controller.firestore.update_stock_position(
+            self.instrument_id, 
+            None, # start_value
+            avg_cost if avg_cost else 0
+        )
+        
+        if success:
+            # Close dialog with OK result
+            self.EndModal(wx.ID_OK)
+        else:
+            wx.MessageBox("Failed to save to database", "Save Error", wx.OK | wx.ICON_ERROR)
+        
+    def get_values(self):
+        """Return the entered values"""
+        try:
+            cost = self.txt_cost.GetValue().strip()
+            return cost if cost else 0
+        except ValueError:
+            return 0
+
 class MainFrame(wx.Frame):
 
     def __init__(self, controller):
@@ -119,6 +210,8 @@ class MainFrame(wx.Frame):
         self.controller.mainframe = self  # Set the mainframe reference in controller
         self.controller.displayer = Displayer(self.controller)  # Initialize Displayer
         self.init_ui()
+        
+        self.last_save_time = time.time()
         
         # Timer to check for incoming data
         self.timer = wx.Timer(self)
@@ -309,6 +402,97 @@ class MainFrame(wx.Frame):
         #add all elements to self.vbox
         self.vbox.Add(lbl_stock, flag=wx.LEFT, border=8)
         self.vbox.Add(self.grid_stock, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
+        
+        # Bind grid cell click event
+        self.grid_stock.Bind(wx.grid.EVT_GRID_CELL_LEFT_CLICK, self.on_stock_cell_click)
+
+    def on_stock_cell_click(self, event):
+        """Handle click on stock grid cell"""
+        row = event.GetRow()
+        
+        # Get the instrument_id using the controller method
+        instrument_id = self.controller.get_stock_instrument_id_from_grid_row(row)
+        if instrument_id is None:
+            instrument_id = "Unknown"
+        
+        # Get current values from the grid
+        symbol_col = -1
+        try:
+            symbol_col = c.stock_labels.index("Symbol")
+        except ValueError:
+            pass
+            
+        # Assuming stock grid has "Buy" for avgCost. "Start" might not be in stock_labels, need to check.
+        # c.stock_labels = ["Symbol", "N", "Buy","Last", "Profit"]
+        # It doesn't have "Start". But Firestore stores it.
+        # If it's not in the grid, we can't get it from the grid.
+        # We should try to get it from the controller/portfolio if possible, or just leave it blank.
+        
+        buy_col = -1
+        try:
+            buy_col = c.stock_labels.index("Buy")
+        except ValueError:
+            pass
+            
+        current_symbol = ""
+        current_start = "" # Not in grid
+        current_cost = ""
+        
+        if symbol_col != -1:
+            current_symbol = self.grid_stock.GetCellValue(row, symbol_col)
+        if buy_col != -1:
+            current_cost = self.grid_stock.GetCellValue(row, buy_col)
+            
+        # Try to get start date and avg cost from controller if available
+        if instrument_id in self.controller.stock_portfolio:
+            pos = self.controller.stock_portfolio[instrument_id]
+            if hasattr(pos, 'startdate'):
+                current_start = pos.startdate
+            if hasattr(pos, 'avgCost'):
+                current_cost = pos.avgCost
+        
+        # Show the edit dialog with controller reference
+        dialog = EditStockDialog(self, self.controller, current_symbol, instrument_id, current_cost)
+        
+        if dialog.ShowModal() == wx.ID_OK:
+            # User clicked Save - data was already saved to Firestore
+            cost = dialog.get_values()
+            
+            if cost is not None:
+                # Update the grid display
+                if buy_col != -1:
+                    self.grid_stock.SetCellValue(row, buy_col, str(cost))
+                
+                # Update the controller/position data
+                self.update_stock_data(row, cost)
+                
+                # Refresh the grid
+                self.grid_stock.ForceRefresh()
+        
+        dialog.Destroy()
+        event.Skip()  # Allow normal grid processing
+
+    def update_stock_data(self, row, cost):
+        """Update the stock position data in the controller"""
+        # Use the controller method to get the instrument_id
+        instrument_id = self.controller.get_stock_instrument_id_from_grid_row(row)
+        
+        if instrument_id and instrument_id in self.controller.stock_portfolio:
+            position = self.controller.stock_portfolio[instrument_id]
+            
+            # Update the position data
+            try:
+                if cost is not None:
+                    position.avgCost = float(cost)
+                
+                position.dirty = True
+                
+                # Trigger a display update
+                if hasattr(self.controller, 'displayer'):
+                    self.controller.displayer.updatePortfolioDisplay()
+                    
+            except ValueError as e:
+                wx.MessageBox(f"Invalid value entered: {e}", "Error", wx.OK | wx.ICON_ERROR)
 
     def on_stock_selected(self, event):
         selected_stock = self.choice.GetStringSelection()
@@ -323,6 +507,12 @@ class MainFrame(wx.Frame):
         self.controller.process_incoming_data()
         status = self.controller.get_connection_status()        
         self.SetTitle(f"The Collar - {status}")
+        
+        # Check if it's time to save prices
+        current_time = time.time()
+        if current_time - self.last_save_time > c.save_interval_minutes * 60:
+            self.last_save_time = current_time
+            threading.Thread(target=self.controller.firestore.save_current_prices).start()
         
         # Update time display
         self.update_time_display()

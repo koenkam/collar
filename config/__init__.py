@@ -5,6 +5,7 @@ import os
 
 def general(c):
     c.scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    c.save_interval_minutes = 15
     return c
 
 def find_project_root(start_path=None):

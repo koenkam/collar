@@ -65,16 +65,25 @@ class Controller:
         instrument_key = "_".join(map(str, finstrument_key_list))
         return instrument_key
     
-    def get_instrument_id_from_grid_row(self, row):
+    def get_option_instrument_id_from_grid_row(self, row):
         portfolio_gui_map = getattr(self, 'option_portfolio_gui_map', {})
         for instr_id, grid_row in portfolio_gui_map.items():
             if grid_row == row:
                 return instr_id
+        return None
+
+    def get_stock_instrument_id_from_grid_row(self, row):
         stock_gui_map = getattr(self, 'stock_portfolio_gui_map', {})
         for instr_id, grid_row in stock_gui_map.items():
             if grid_row == row:
                 return instr_id
         return None
+
+    def get_instrument_id_from_grid_row(self, row):
+        # Deprecated: Use specific methods instead
+        res = self.get_option_instrument_id_from_grid_row(row)
+        if res: return res
+        return self.get_stock_instrument_id_from_grid_row(row)
 
     def get_instrument_id_from_request(self, reqId):
         request = self.requests.get(reqId)
@@ -222,37 +231,44 @@ class Controller:
         if price is None or price <= 0:
             return
             
-        option_id = self.find_option_id_for_stocktick(contract.symbol)
-        
         if contract.secType == "STK":
-            # Handle stock price updates
-            if option_id and option_id in self.option_portfolio:
-                # Update underlying price for option
-                if not hasattr(self.option_portfolio[option_id], 'underlyingPrice'):
-                    self.option_portfolio[option_id].underlyingPrice = None
-                self.option_portfolio[option_id].underlyingPrice = price
-                self.option_portfolio[option_id].dirty = True
-                self.displayer.updatePortfolioDisplay()
-                return
+            self.handle_tickPrice_stock(instrument_id, contract, price)
+        elif contract.secType == "OPT":
+            self.handle_tickPrice_option(instrument_id, contract, price)
+
+    def handle_tickPrice_stock(self, instrument_id, contract, price):
+        # Update underlying price for ALL matching options
+        updates_made = False
+        for opt_id, position in self.option_portfolio.items():
+            if position.contract.secType == 'OPT' and position.contract.symbol == contract.symbol:
+                if not hasattr(position, 'underlyingPrice'):
+                    position.underlyingPrice = None
+                position.underlyingPrice = price
+                position.dirty = True
+                updates_made = True
+        
+        if updates_made:
+            self.displayer.updatePortfolioDisplay()
+        
+        # Update stock position if it exists
+        if instrument_id in self.stock_portfolio:
+            if not hasattr(self.stock_portfolio[instrument_id], 'lastPrice'):
+                self.stock_portfolio[instrument_id].lastPrice = None
+            self.stock_portfolio[instrument_id].lastPrice = price
+            self.stock_portfolio[instrument_id].dirty = True
+            self.displayer.updatePortfolioDisplay()
             
-            # Update stock position if it exists
-            if instrument_id in self.stock_portfolio:
-                if not hasattr(self.stock_portfolio[instrument_id], 'lastPrice'):
-                    self.stock_portfolio[instrument_id].lastPrice = None
-                self.stock_portfolio[instrument_id].lastPrice = price
-                self.stock_portfolio[instrument_id].dirty = True
+            # Update Firestore
+            self.firestore.update_stock_price(instrument_id, price)
+
+    def handle_tickPrice_option(self, instrument_id, contract, price):
+        if self.incoming_command["kwargs"].get("tickType") in (1, 2, 4): 
+            if instrument_id in self.option_portfolio:
+                if not hasattr(self.option_portfolio[instrument_id], 'lastPrice'):
+                    self.option_portfolio[instrument_id].lastPrice = None
+                self.option_portfolio[instrument_id].lastPrice = price
+                self.option_portfolio[instrument_id].dirty = True
                 self.displayer.updatePortfolioDisplay()
-            return
-            
-        # Handle option price updates
-        if contract.secType == "OPT":
-            if self.incoming_command["kwargs"].get("tickType") in (1, 2, 4): 
-                if instrument_id in self.option_portfolio:
-                    if not hasattr(self.option_portfolio[instrument_id], 'lastPrice'):
-                        self.option_portfolio[instrument_id].lastPrice = None
-                    self.option_portfolio[instrument_id].lastPrice = price
-                    self.option_portfolio[instrument_id].dirty = True
-                    self.displayer.updatePortfolioDisplay()
 
     def handle_tickOptionComputation(self):
         reqId = self.incoming_command["kwargs"]["reqId"]

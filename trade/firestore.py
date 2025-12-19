@@ -35,7 +35,7 @@ class FirestoreDB:
         if doc.exists:
             position_data = doc.to_dict()
             portfolio[instrument_id].avgCost = position_data.get('avgCost')
-            portfolio[instrument_id].lastPrice = position_data.get('lastPrice')
+            portfolio[instrument_id].lastPrice = position_data.get('lastPrice', 0)
             portfolio[instrument_id].startdate = position_data.get('startdate')
        
         else:
@@ -60,6 +60,8 @@ class FirestoreDB:
             position_data = doc.to_dict()
             portfolio[instrument_id].premium = position_data.get('premium')
             portfolio[instrument_id].startdate = position_data.get('startdate')
+            portfolio[instrument_id].lastPrice = position_data.get('lastPrice', 0)
+            portfolio[instrument_id].underlyingPrice = position_data.get('underlyingPrice', 0)
        
         else:
             # Create new document
@@ -127,4 +129,107 @@ class FirestoreDB:
                     
         except Exception as e:
             print(f"Error updating Firestore for {instrument_id}: {e}")
+            return False
+
+    def update_stock_position(self, instrument_id, start_value=None, avg_cost=None):
+        """Update start and avgCost values for a stock position in Firestore"""
+        try:
+            position_doc = self.option_portfolio_ref.document(instrument_id)
+            doc = position_doc.get()
+            
+            if doc.exists:
+                # Document exists - update it
+                update_data = {}
+                
+                if start_value is not None:
+                    update_data['startdate'] = start_value
+                
+                if avg_cost is not None:
+                    update_data['avgCost'] = float(avg_cost)
+                
+                if update_data:  # Only update if there's data to update
+                    position_doc.update(update_data)
+                    return True
+                else:
+                    return False
+            else:
+                # Document doesn't exist - create it with basic info
+                portfolio = self.controller.stock_portfolio
+                if instrument_id in portfolio:
+                    position = portfolio[instrument_id]
+                    position_data = {
+                        'avgCost': float(avg_cost) if avg_cost else position.avgCost,
+                        'startdate': start_value if start_value else datetime.datetime.now().strftime("%Y%m%d"),
+                        'symbol': position.contract.symbol,
+                        'secType': position.contract.secType,
+                        'n': position.n,
+                        'conId': position.contract.conId,
+                        'lastPrice': 0
+                    }
+                    position_doc.set(position_data)
+                    print(f"Created new Firestore document {instrument_id} with {position_data}")
+                    return True
+                else:
+                    print(f"Position {instrument_id} not found in stock_portfolio")
+                    return False
+                    
+        except Exception as e:
+            print(f"Error updating Firestore for {instrument_id}: {e}")
+            return False
+
+    def update_stock_price(self, instrument_id, price):
+        """Update lastPrice for a stock position in Firestore"""
+        try:
+            position_doc = self.option_portfolio_ref.document(instrument_id)
+            position_doc.update({'lastPrice': float(price)})
+            return True
+        except Exception as e:
+            # print(f"Error updating stock price in Firestore: {e}")
+            return False
+
+    def save_current_prices(self):
+        """Save current prices for all positions to Firestore"""
+        try:
+            batch = self.db.batch()
+            count = 0
+            
+            # Update options
+            for instrument_id, position in self.controller.option_portfolio.items():
+                ref = self.option_portfolio_ref.document(instrument_id)
+                updates = {}
+                if hasattr(position, 'lastPrice') and position.lastPrice is not None and position.lastPrice != 0:
+                    updates['lastPrice'] = float(position.lastPrice)
+                if hasattr(position, 'underlyingPrice') and position.underlyingPrice is not None and position.underlyingPrice != 0:
+                    updates['underlyingPrice'] = float(position.underlyingPrice)
+                
+                if updates:
+                    batch.update(ref, updates)
+                    count += 1
+                    if count >= 400: # Firestore batch limit is 500
+                        batch.commit()
+                        batch = self.db.batch()
+                        count = 0
+
+            # Update stocks
+            for instrument_id, position in self.controller.stock_portfolio.items():
+                ref = self.option_portfolio_ref.document(instrument_id)
+                updates = {}
+                if hasattr(position, 'lastPrice') and position.lastPrice is not None and position.lastPrice != 0:
+                    updates['lastPrice'] = float(position.lastPrice)
+                
+                if updates:
+                    batch.update(ref, updates)
+                    count += 1
+                    if count >= 400:
+                        batch.commit()
+                        batch = self.db.batch()
+                        count = 0
+                        
+            if count > 0:
+                batch.commit()
+                
+            print(f"Saved prices to Firestore at {datetime.datetime.now()}")
+            return True
+        except Exception as e:
+            print(f"Error saving prices to Firestore: {e}")
             return False

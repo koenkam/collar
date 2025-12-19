@@ -114,8 +114,12 @@ class Displayer:
             underlying = position.underlyingPrice if hasattr(position, 'underlyingPrice') else ""
             if underlying and strike and contract.secType == 'OPT':
                 assignvalue = -lastPrice * position.n * 100
-                assignvalue += (strike - underlying) * position.n * 100
-                itm_percentage = (underlying - strike) / strike * 100
+                if contract.right == 'C':
+                    assignvalue += (underlying - strike) * position.n * 100
+                    itm_percentage = (strike - underlying) / strike * 100
+                else:
+                    assignvalue += (strike - underlying) * position.n * 100
+                    itm_percentage = (underlying - strike) / strike * 100
                 
             else:
                 assignvalue = ""
@@ -207,9 +211,9 @@ class Displayer:
     def _create_strike_underlying_rule(self):
         """Rule for highlighting underlying price based on strike comparison"""
         return {
-            'columns': ['Strike', 'Underlying'],
+            'columns': ['Strike', 'Underlying', 'Type'],
             'target_column': 'Underlying',
-            'condition': lambda strike, underlying: underlying < strike,
+            'condition': lambda strike, underlying, type: (type == 'PUT' and underlying < strike) or (type == 'CALL' and underlying > strike),
             'colors': {'true': 'red', 'false': 'green'}
         }
     
@@ -292,10 +296,8 @@ class Displayer:
                     try:
                         values.append(float(value))
                     except (ValueError, TypeError):
-                        if rule.get('allow_empty', False):
-                            values.append(value)
-                        else:
-                            return
+                        # Allow non-numeric values (like 'PUT'/'CALL') to pass through
+                        values.append(value)
             
             # Apply condition
             if rule.get('multi_condition', False):
