@@ -13,11 +13,15 @@ from util import Stub
 class Controller:
 
     def __init__(self, gui_to_ib, ib_to_gui):
+        print('Running sheets_to_firestore()...')
         sheets_to_firestore()
+        print('Finished sheets_to_firestore()')
         self.ib_to_gui = ib_to_gui
         self.gui_to_ib = gui_to_ib
+        print('Initializing FirestoreDB in Controller...')
         self.firestore = FirestoreDB(self)
         self.firestore.get_portfolio()
+        print('Initialized FirestoreDB in Controller')
         self.reqId = 1
         self.orderId = 1  # Separate counter for order IDs
         self.requests = OrderedDict()  # Maintain order of requests
@@ -258,8 +262,6 @@ class Controller:
             self.stock_portfolio[instrument_id].dirty = True
             self.displayer.updatePortfolioDisplay()
             
-            # Update Firestore
-            self.firestore.update_stock_price(instrument_id, price)
 
     def handle_tickPrice_option(self, instrument_id, contract, price):
         if self.incoming_command["kwargs"].get("tickType") in (1, 2, 4): 

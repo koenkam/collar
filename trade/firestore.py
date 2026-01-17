@@ -177,15 +177,6 @@ class FirestoreDB:
             print(f"Error updating Firestore for {instrument_id}: {e}")
             return False
 
-    def update_stock_price(self, instrument_id, price):
-        """Update lastPrice for a stock position in Firestore"""
-        try:
-            position_doc = self.option_portfolio_ref.document(instrument_id)
-            position_doc.update({'lastPrice': float(price)})
-            return True
-        except Exception as e:
-            # print(f"Error updating stock price in Firestore: {e}")
-            return False
 
     def save_current_prices(self):
         """Save current prices for all positions to Firestore"""

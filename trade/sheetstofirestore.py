@@ -17,15 +17,21 @@ def sheets_to_firestore():
     except Exception as e:
         print(f"Error retrieving prices from sheet: {e}")
         return
+    print("Connecting to Firestore...")
     db = firestore.Client()
     ref = db.collection('portfolio')
-    #get the doc with pk 'STK_US03' and put all values in a dict
+    
+    print("Updating STK_US03...")
     doc_ref = ref.document('STK_US03')
     doc = doc_ref.get()
     if doc.exists:
+        print("Document STK_US03 exists, updating lastPrice...")
         data = doc.to_dict()
         data['lastPrice'] = US03price
+        print(f"New data for STK_US03: {data}")
         doc_ref.set(data)
+        print("STK_US03 updated successfully.")
+    print("Updated STK_US03")
     doc_ref = ref.document('STK_ERND')
     doc = doc_ref.get()
     if doc.exists:

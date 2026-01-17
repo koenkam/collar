@@ -211,7 +211,7 @@ class MainFrame(wx.Frame):
         self.controller.displayer = Displayer(self.controller)  # Initialize Displayer
         self.init_ui()
         
-        self.last_save_time = time.time()
+        self.last_save_time = 0
         
         # Timer to check for incoming data
         self.timer = wx.Timer(self)
