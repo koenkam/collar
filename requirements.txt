@@ -56,4 +56,4 @@ termcolor==3.1.0
 typing_extensions==4.15.0
 uritemplate==4.2.0
 urllib3==2.5.0
-wxPython==4.2.3
+wxPython==4.3.1

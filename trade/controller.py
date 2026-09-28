@@ -1,14 +1,19 @@
 from collections import OrderedDict
 from ibapi.contract import Contract
 from ibapi.order import Order
+import re
 import time
 import datetime
 from config import create_c
 #from experiments import option
 c = create_c()
-from .firestore import FirestoreDB
-from .sheetstofirestore import sheets_to_firestore
+from .book import as_count, describe, option_id, reconcile, stock_id
+from .firestore import FirestoreDB, log_sequence, sort_log
+from .sheetstofirestore import sheets_to_firestore, update_collar_account_value
 from util import Stub
+import threading
+
+UNSET_COMMISSION = 1e300
 
 class Controller:
 
@@ -20,8 +25,25 @@ class Controller:
         self.gui_to_ib = gui_to_ib
         print('Initializing FirestoreDB in Controller...')
         self.firestore = FirestoreDB(self)
-        self.firestore.get_portfolio()
+        self.summary = self.firestore.get_summary()
+        self.log_trades = self.firestore.get_log()
+        self.book_options, self.book_stocks = self.firestore.load_book()
+        self.processed = self.firestore.load_processed()
+        self.review = self.firestore.load_review()
+        self.book_initialized = self.firestore.is_initialized()
         print('Initialized FirestoreDB in Controller')
+        self.broker = {}
+        self.fills = {}
+        self.commissions = {}
+        self.fill_symbols = {}
+        self.symbol_activity = {}
+        self.underlying = {}
+        self.subscribed = set()
+        self.positions_ready = False
+        self.executions_ready = False
+        self.reconcile_due = None
+        self.book_paused = False
+        self.status_message = ""
         self.reqId = 1
         self.orderId = 1  # Separate counter for order IDs
         self.requests = OrderedDict()  # Maintain order of requests
@@ -34,6 +56,13 @@ class Controller:
         self.stock_portfolio_gui_map = {}
         self.mainframe = None  # Will be set by MainFrame
         self.displayer = None
+        self.account_value = None
+        self.account_currency = "USD"
+        self.account_id = ""
+        self.account_summary_req_id = None
+        self.last_account_summary_request = 0
+        self.account_value_synced_to_sheet = False
+        self.net_liquidation_by_currency = {}
     
     def get_connection_status(self):
         if not hasattr(self, 'last_successful_connection'):
@@ -53,6 +82,8 @@ class Controller:
     def start(self):
         self.reqPositions()
         self.reqOpenOrders()
+        self.reqAccountSummary()
+        self.reqExecutions()
 
 
     def get_instrument_id_from_contract(self, contract):
@@ -114,7 +145,77 @@ class Controller:
 
     def handle_currentTime(self):
         self.last_successful_connection = time.time()
-    
+        if self.account_value is None:
+            now = time.time()
+            if now - self.last_account_summary_request > 15:
+                self.reqAccountSummary()
+
+    def handle_managedAccounts(self):
+        accounts_list = self.incoming_command["kwargs"].get("accountsList", "")
+        accounts = [a.strip() for a in accounts_list.split(",") if a.strip()]
+        if accounts and not self.account_id:
+            self.account_id = accounts[0]
+
+    def handle_accountSummary(self):
+        tag = self.incoming_command["kwargs"].get("tag")
+        value = self.incoming_command["kwargs"].get("value")
+        currency = (self.incoming_command["kwargs"].get("currency") or "").strip().upper() or "USD"
+        account = self.incoming_command["kwargs"].get("account", "")
+        if account:
+            self.account_id = account
+        print(f"Account summary {tag}={value} {currency} {account}")
+        if tag != "NetLiquidation" or value in (None, ""):
+            return
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            return
+        self.net_liquidation_by_currency[currency] = amount
+        self.account_value, self.account_currency = self._select_net_liquidation()
+        if self.mainframe:
+            self.mainframe.update_account_display()
+
+    def handle_accountSummaryEnd(self):
+        self.account_value, self.account_currency = self._select_net_liquidation()
+        if self.mainframe:
+            self.mainframe.update_account_display()
+        if self.account_value is None or self.account_value_synced_to_sheet:
+            return
+        self.account_value_synced_to_sheet = True
+        print(
+            f"Using NetLiquidation {self.account_value} {self.account_currency} "
+            f"from {self.net_liquidation_by_currency}"
+        )
+        threading.Thread(
+            target=update_collar_account_value,
+            args=(self.account_value,),
+            daemon=True
+        ).start()
+
+    def _select_net_liquidation(self):
+        values = self.net_liquidation_by_currency
+        if not values:
+            return None, "USD"
+        for currency in ("BASE", "USD"):
+            if currency in values:
+                return values[currency], currency
+        currency, amount = max(values.items(), key=lambda item: abs(item[1]))
+        return amount, currency
+
+    def reqAccountSummary(self):
+        if self.account_summary_req_id is not None:
+            self.sendIbCommand({
+                "method_name": "cancelAccountSummary",
+                "reqId": self.account_summary_req_id
+            })
+        self.last_account_summary_request = time.time()
+        self.account_summary_req_id = self.reqId
+        command = {
+            "method_name": "reqAccountSummary",
+            "groupName": "All",
+            "tags": "NetLiquidation"
+        }
+        self.sendIbCommand(command)
     
     def process_incoming_data(self):
         while not self.ib_to_gui.empty():
@@ -123,7 +224,11 @@ class Controller:
 
             if self.incoming_command["type"] in ['command_result', 'error']:
                 return
-            if self.incoming_command["type"] in ['position', 'positionEnd', 'openOrder', 'openOrderEnd', 'currentTime']:
+            if self.incoming_command["type"] in [
+                'position', 'positionEnd', 'openOrder', 'openOrderEnd',
+                'currentTime', 'accountSummary', 'accountSummaryEnd', 'managedAccounts',
+                'execDetails', 'execDetailsEnd', 'commissionReport'
+            ]:
                 handler = getattr(self, f"handle_{self.incoming_command['type']}")
                 handler()
                 continue
@@ -215,6 +320,9 @@ class Controller:
         }
         self.sendIbCommand(command)
 
+    def reqExecutions(self):
+        self.sendIbCommand({"method_name": "reqExecutions"})
+
     def find_option_id_for_stocktick(self, symbol):
         for instrument_id, position in self.option_portfolio.items():
             contract = position.contract
@@ -235,12 +343,13 @@ class Controller:
         if price is None or price <= 0:
             return
             
-        if contract.secType == "STK":
+        if contract.secType in ("STK", "IND"):
             self.handle_tickPrice_stock(instrument_id, contract, price)
         elif contract.secType == "OPT":
             self.handle_tickPrice_option(instrument_id, contract, price)
 
     def handle_tickPrice_stock(self, instrument_id, contract, price):
+        self.underlying[contract.symbol] = price
         # Update underlying price for ALL matching options
         updates_made = False
         for opt_id, position in self.option_portfolio.items():
@@ -279,7 +388,7 @@ class Controller:
         if request is None:
             return
         contract = request.get("contract", None)
-        if contract is None:
+        if contract is None or instrument_id not in self.option_portfolio:
             return
         self.option_portfolio[instrument_id].impliedVol = self.incoming_command["kwargs"].get("impliedVol", None)
         self.option_portfolio[instrument_id].delta = self.incoming_command["kwargs"].get("delta", None)
@@ -291,76 +400,587 @@ class Controller:
         self.displayer.updatePortfolioDisplay()
 
     def handle_position(self):
-        """Handle individual position updates"""
-        self.account = self.incoming_command["kwargs"].get("account", "")
-        self.contract = self.incoming_command["kwargs"].get("contract", {})
-        self.n = self.incoming_command["kwargs"].get("position", 0.0)
-        if self.n == 0:
+        """Record the broker position, including a count of zero."""
+        kwargs = self.incoming_command["kwargs"]
+        account = kwargs.get("account", "")
+        contract = kwargs.get("contract")
+        if contract is None or contract.secType not in ("OPT", "STK"):
             return
-        if self.contract.symbol == "SPX":
-            return
-        self.avgCost = self.incoming_command["kwargs"].get("avgCost", 0.0)
-        self.instrument_id = self.get_instrument_id_from_contract(self.contract)
-        if self.contract.secType == "OPT":
-            self.handle_postion_option()
-        elif self.contract.secType == "STK":
-            self.handle_position_stock()
-
-    def handle_position_stock(self):
-        self.stock_portfolio[self.instrument_id] = Stub(
-                account=self.account,
-                n=self.n,
-                avgCost=self.avgCost,
-                contract=self.contract,
-                dirty=True
-            )
-        self.displayer.updatePortfolioDisplay()
-        self.contract.exchange = c.default_exchange
-        self.firestore.merge_stock_item(self.instrument_id)
-
-    def handle_postion_option(self):
-        self.option_portfolio[self.instrument_id] = Stub(
-                account=self.account,
-                n=self.n,
-                avgCost=self.avgCost,
-                contract=self.contract,
-                premium=None,
-                startdate=None,
-                dirty=True
-            )
-        self.firestore.merge_portfolio_item(self.instrument_id)
-            
-        # Update GUI portfolio display
+        n = as_count(kwargs.get("position", 0.0))
+        avg_cost = kwargs.get("avgCost", 0.0)
+        instrument_id = self.get_instrument_id_from_contract(contract)
+        if n == 0:
+            self.broker.pop(instrument_id, None)
+        else:
+            self.broker[instrument_id] = self.broker_entry(contract, n, avg_cost)
+        if self.positions_ready:
+            self.touch(contract.symbol)
+        if contract.secType == "OPT":
+            self.update_option_stub(instrument_id, contract, n, avg_cost, account)
+        else:
+            self.update_stock_stub(instrument_id, contract, n, avg_cost, account)
         self.displayer.updatePortfolioDisplay()
 
-        self.contract.exchange = c.default_exchange
-        command = {
+    def broker_entry(self, contract, n, avg_cost):
+        entry = {
+            "sec_type": contract.secType,
+            "symbol": contract.symbol,
+            "n": n,
+            "avg_cost": avg_cost,
+            "conId": contract.conId,
+            "multiplier": self.contract_multiplier(contract),
+        }
+        if contract.secType == "OPT":
+            entry.update({
+                "strike": float(contract.strike),
+                "right": contract.right,
+                "expiry": contract.lastTradeDateOrContractMonth,
+            })
+        return entry
+
+    def contract_multiplier(self, contract):
+        try:
+            value = float(contract.multiplier or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            return value
+        return 100.0 if contract.secType == "OPT" else 1.0
+
+    def update_option_stub(self, instrument_id, contract, n, avg_cost, account):
+        stub = self.option_portfolio.get(instrument_id)
+        if n == 0:
+            if stub is not None and not hasattr(stub, "order"):
+                self.remove_option_stub(instrument_id)
+            elif stub is not None:
+                stub.n = 0
+                stub.dirty = True
+            return
+        if stub is None:
+            stub = Stub(account=account, n=n, avgCost=avg_cost, contract=contract,
+                        premium=None, startdate="", dirty=True)
+            doc = self.book_options.get(instrument_id) or {}
+            stub.lastPrice = doc.get("lastPrice", 0)
+            stub.underlyingPrice = doc.get("underlyingPrice", 0)
+            self.option_portfolio[instrument_id] = stub
+        stub.account = account
+        stub.n = n
+        stub.avgCost = avg_cost
+        stub.contract = contract
+        stub.dirty = True
+        self.apply_book_to_option(instrument_id)
+        self.subscribe_option(instrument_id, contract)
+
+    def update_stock_stub(self, instrument_id, contract, n, avg_cost, account):
+        if n == 0:
+            self.remove_stock_stub(instrument_id)
+            return
+        stub = self.stock_portfolio.get(instrument_id)
+        if stub is None:
+            doc = self.book_stocks.get(instrument_id) or {}
+            stub = Stub(account=account, n=n, avgCost=avg_cost, contract=contract, dirty=True)
+            stub.lastPrice = doc.get("lastPrice", 0)
+            self.stock_portfolio[instrument_id] = stub
+        stub.account = account
+        stub.n = n
+        stub.brokerAvgCost = avg_cost
+        stub.contract = contract
+        stub.dirty = True
+        self.apply_book_to_stock(instrument_id)
+        self.subscribe_stock(contract)
+
+    def remove_option_stub(self, instrument_id):
+        self.option_portfolio.pop(instrument_id, None)
+        self.option_portfolio_gui_map.clear()
+
+    def remove_stock_stub(self, instrument_id):
+        self.stock_portfolio.pop(instrument_id, None)
+        self.stock_portfolio_gui_map.clear()
+
+    def apply_book_to_option(self, instrument_id):
+        stub = self.option_portfolio.get(instrument_id)
+        if stub is None:
+            return
+        doc = self.book_options.get(instrument_id) or {}
+        stub.premium = doc.get("premium")
+        stub.startdate = doc.get("startdate") or ""
+        stub.dirty = True
+
+    def apply_book_to_stock(self, instrument_id):
+        stub = self.stock_portfolio.get(instrument_id)
+        if stub is None:
+            return
+        doc = self.book_stocks.get(instrument_id) or {}
+        broker_avg = getattr(stub, "brokerAvgCost", stub.avgCost)
+        stub.avgCost = doc.get("avgCost") or broker_avg
+        stub.credit = float(doc.get("credit") or 0.0)
+        stub.startdate = doc.get("startdate") or ""
+        stub.dirty = True
+
+    def refresh_from_book(self):
+        for instrument_id in list(self.option_portfolio):
+            self.apply_book_to_option(instrument_id)
+        for instrument_id in list(self.stock_portfolio):
+            self.apply_book_to_stock(instrument_id)
+        if self.displayer:
+            self.displayer.updatePortfolioDisplay()
+        if self.mainframe:
+            self.mainframe.refresh_book_views()
+
+    def market_data(self, contract):
+        self.sendIbCommand({
             "method_name": "reqMktData",
-            "contract": self.contract,
+            "contract": contract,
             "genericTickList": "",
             "snapshot": False,
             "regulatorySnapshot": False,
             "mktDataOptions": []
-        }
-        self.sendIbCommand(command)
-        stock_contract = Contract()
-        stock_contract.symbol = self.contract.symbol
-        stock_contract.secType = "STK"
-        stock_contract.currency = self.contract.currency
-        stock_contract.exchange = c.default_exchange
-        stock_command = {
-            "method_name": "reqMktData",
-            "contract": stock_contract,
-            "genericTickList": "",
-            "snapshot": False,
-            "regulatorySnapshot": False,
-            "mktDataOptions": []
-        }
-        self.sendIbCommand(stock_command)
+        })
+
+    def subscribe_option(self, instrument_id, contract):
+        if instrument_id not in self.subscribed:
+            self.subscribed.add(instrument_id)
+            contract.exchange = c.default_exchange
+            self.market_data(contract)
+        underlying = Contract()
+        underlying.symbol = contract.symbol
+        underlying.currency = contract.currency or "USD"
+        underlying.exchange = c.default_exchange
+        if contract.symbol in c.cash_settled_symbols:
+            underlying.secType = "IND"
+            key = f"IND_{contract.symbol}"
+        else:
+            underlying.secType = "STK"
+            underlying.exchange = "SMART"
+            key = f"STK_{contract.symbol}"
+        if key not in self.subscribed:
+            self.subscribed.add(key)
+            self.market_data(underlying)
+
+    def subscribe_stock(self, contract):
+        key = f"STK_{contract.symbol}"
+        if key in self.subscribed:
+            return
+        self.subscribed.add(key)
+        stock = Contract()
+        stock.symbol = contract.symbol
+        stock.secType = "STK"
+        stock.currency = contract.currency or "USD"
+        stock.exchange = "SMART"
+        stock.primaryExchange = contract.primaryExchange or ""
+        self.market_data(stock)
 
     def handle_positionEnd(self):
-        # Final GUI update or summary calculations
+        self.positions_ready = True
+        self.schedule_book(0)
         self.finalizePortfolioDisplay()
+
+    # --- fills ---------------------------------------------------------------
+
+    def handle_execDetails(self):
+        kwargs = self.incoming_command["kwargs"]
+        contract = kwargs.get("contract")
+        execution = kwargs.get("execution")
+        if contract is None or execution is None or not execution.execId:
+            return
+        if execution.execId in self.processed:
+            return
+        date, ts = self.parse_execution_time(execution.time)
+        fill = {
+            "exec_id": execution.execId,
+            "instrument_id": self.get_instrument_id_from_contract(contract),
+            "sec_type": contract.secType,
+            "symbol": contract.symbol,
+            "side": execution.side,
+            "qty": float(execution.shares),
+            "price": float(execution.price),
+            "date": date,
+            "ts": ts,
+            "perm_id": execution.permId,
+            "conId": contract.conId,
+            "multiplier": self.contract_multiplier(contract),
+        }
+        if contract.secType == "OPT":
+            fill.update({
+                "strike": float(contract.strike),
+                "right": contract.right,
+                "expiry": contract.lastTradeDateOrContractMonth,
+            })
+        self.fills[execution.execId] = fill
+        self.fill_symbols[execution.execId] = contract.symbol
+        if self.executions_ready:
+            self.touch(contract.symbol)
+
+    def handle_commissionReport(self):
+        report = self.incoming_command["kwargs"].get("commissionReport")
+        if report is None or not report.execId:
+            return
+        commission = float(report.commission)
+        if commission >= UNSET_COMMISSION:
+            return
+        self.commissions[report.execId] = commission
+        symbol = self.fill_symbols.get(report.execId)
+        if symbol and self.executions_ready:
+            self.touch(symbol)
+        else:
+            self.schedule_book()
+
+    def handle_execDetailsEnd(self):
+        self.executions_ready = True
+        self.schedule_book(0)
+
+    def parse_execution_time(self, text):
+        text = str(text or "")
+        digits = re.match(r"\s*(\d{8})", text)
+        date = digits.group(1) if digits else datetime.date.today().strftime("%Y%m%d")
+        clock = re.search(r"(\d{1,2}):(\d{2}):(\d{2})", text)
+        moment = datetime.datetime.strptime(date, "%Y%m%d")
+        if clock:
+            moment = moment.replace(hour=int(clock.group(1)), minute=int(clock.group(2)),
+                                    second=int(clock.group(3)))
+        return date, moment.timestamp()
+
+    # --- book --------------------------------------------------------------
+
+    def touch(self, symbol):
+        self.symbol_activity[symbol] = time.time()
+        self.schedule_book()
+
+    def schedule_book(self, delay=2.0):
+        due = time.time() + delay
+        if self.reconcile_due is None or due < self.reconcile_due:
+            self.reconcile_due = due
+
+    def tick(self):
+        if self.book_paused or not (self.positions_ready and self.executions_ready):
+            return
+        if self.reconcile_due is None or time.time() < self.reconcile_due:
+            return
+        self.reconcile_due = None
+        try:
+            if self.book_initialized:
+                self.run_book()
+            else:
+                self.start_book()
+        except Exception as e:
+            print(f"Position book error: {e}")
+            self.set_status(f"Book not updated: {e}")
+            self.schedule_book(30)
+
+    def set_status(self, text):
+        self.status_message = text
+        print(text)
+        if self.mainframe:
+            self.mainframe.update_status()
+
+    def pending_fills(self):
+        ready, waiting = [], set()
+        for exec_id, fill in self.fills.items():
+            if exec_id in self.processed:
+                continue
+            commission = self.commissions.get(exec_id)
+            if commission is None:
+                waiting.add(fill["symbol"])
+                continue
+            ready.append(dict(fill, commission=commission))
+        return ready, waiting
+
+    def book_config(self):
+        return {
+            "cash_settled": set(c.cash_settled_symbols),
+            "roll_window_seconds": c.roll_window_seconds,
+            "underlying": dict(self.underlying),
+        }
+
+    def run_book(self):
+        now = time.time()
+        fills, waiting = self.pending_fills()
+        settling = {s for s, t in self.symbol_activity.items() if now - t < c.book_settle_seconds}
+        skip = waiting | settling
+        outcomes = reconcile(self.book_options, self.book_stocks, self.broker, fills,
+                             datetime.date.today(), self.book_config(), skip_symbols=skip)
+        messages = []
+        touched = set()
+        for outcome in outcomes:
+            touched.add(outcome.symbol)
+            if outcome.ok:
+                self.commit_outcome(outcome)
+                messages.extend(outcome.messages)
+            else:
+                self.save_review(outcome)
+        for symbol in list(self.review):
+            if symbol not in touched and symbol not in skip:
+                self.firestore.commit([("delete", "review", symbol)])
+                self.review.pop(symbol, None)
+        if messages:
+            self.set_status("; ".join(messages))
+        if skip:
+            self.schedule_book(c.book_settle_seconds / 2)
+        if outcomes or messages:
+            self.refresh_from_book()
+        elif self.mainframe:
+            self.mainframe.update_status()
+
+    def next_log_seq(self):
+        return max((log_sequence(t) for t in self.log_trades), default=0) + 1
+
+    def log_ops(self, rows):
+        ops, saved = [], []
+        seq = self.next_log_seq()
+        for row in rows:
+            doc = dict(row, seq=seq)
+            log_id = f"{doc['close_date']}_{seq:04d}"
+            ops.append(("set", "log", log_id, doc))
+            saved.append(dict(doc, id=log_id))
+            seq += 1
+        return ops, saved
+
+    def commit_outcome(self, outcome):
+        ops = []
+        for iid, doc in outcome.options.items():
+            ops.append(("delete", "portfolio", iid) if doc is None else ("set", "portfolio", iid, doc))
+        for iid, doc in outcome.stocks.items():
+            ops.append(("delete", "portfolio", iid) if doc is None else ("set", "portfolio", iid, doc))
+        log_ops, saved = self.log_ops(outcome.logs)
+        ops.extend(log_ops)
+        event = "; ".join(outcome.messages)
+        for exec_id in outcome.processed:
+            ops.append(("set", "processed", exec_id, {"symbol": outcome.symbol, "event": event}))
+        if outcome.symbol in self.review:
+            ops.append(("delete", "review", outcome.symbol))
+        self.firestore.commit(ops)
+        for iid, doc in outcome.options.items():
+            if doc is None:
+                self.book_options.pop(iid, None)
+            else:
+                self.book_options[iid] = doc
+        for iid, doc in outcome.stocks.items():
+            if doc is None:
+                self.book_stocks.pop(iid, None)
+            else:
+                self.book_stocks[iid] = doc
+        self.log_trades.extend(saved)
+        sort_log(self.log_trades)
+        self.processed.update(outcome.processed)
+        self.review.pop(outcome.symbol, None)
+
+    def save_review(self, outcome):
+        item = dict(outcome.review, updated=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+        previous = self.review.get(outcome.symbol)
+        if previous and {k: v for k, v in previous.items() if k != "updated"} == \
+                {k: v for k, v in item.items() if k != "updated"}:
+            return
+        self.firestore.commit([("set", "review", outcome.symbol, item)])
+        self.review[outcome.symbol] = item
+        self.set_status(f"Review {outcome.symbol}: {outcome.problems[0]}")
+
+    def accept_broker_ops(self, symbols, archive_label):
+        """Make the book counts equal the broker for these symbols."""
+        ops = []
+        today = datetime.date.today().strftime("%Y%m%d")
+        options = dict(self.book_options)
+        stocks = dict(self.book_stocks)
+        for iid, doc in list(options.items()):
+            if doc.get("symbol") in symbols and iid not in self.broker:
+                ops.append(("set", "portfolio_archive", iid, dict(doc, archived=today, reason=archive_label)))
+                ops.append(("delete", "portfolio", iid))
+                options.pop(iid)
+        for iid, doc in list(stocks.items()):
+            if doc.get("symbol") in symbols and iid not in self.broker:
+                ops.append(("set", "portfolio_archive", iid, dict(doc, archived=today, reason=archive_label)))
+                ops.append(("delete", "portfolio", iid))
+                stocks.pop(iid)
+        for iid, entry in self.broker.items():
+            if entry["symbol"] not in symbols:
+                continue
+            if entry["sec_type"] == "OPT":
+                doc = dict(options.get(iid) or {
+                    "secType": "OPT", "symbol": entry["symbol"], "right": entry["right"],
+                    "strike": entry["strike"], "expiry": entry["expiry"],
+                    "premium": None, "startdate": today,
+                })
+                doc.update({"n": entry["n"], "multiplier": entry["multiplier"], "conId": entry["conId"]})
+                options[iid] = doc
+            else:
+                doc = dict(stocks.get(iid) or {"secType": "STK", "symbol": entry["symbol"], "startdate": today})
+                if not doc.get("avgCost"):
+                    doc["avgCost"] = entry["avg_cost"]
+                doc.setdefault("credit", 0.0)
+                doc.update({"n": entry["n"], "conId": entry["conId"]})
+                stocks[iid] = doc
+            ops.append(("set", "portfolio", iid, doc))
+        return ops, options, stocks
+
+    def start_book(self):
+        """First run: adopt broker counts and hand-entered premiums, archive the rest."""
+        symbols = {d.get("symbol") for d in self.book_options.values()}
+        symbols |= {d.get("symbol") for d in self.book_stocks.values()}
+        symbols |= {e["symbol"] for e in self.broker.values()}
+        ops, options, stocks = self.accept_broker_ops(symbols, "not held when the book started")
+        archived = sum(1 for op in ops if op[1] == "portfolio_archive")
+        for exec_id in self.fills:
+            ops.append(("set", "processed", exec_id, {"event": "before the book started"}))
+        ops.append(("set", "summary", "book", {
+            "initialized": datetime.date.today().strftime("%Y%m%d"),
+        }))
+        self.firestore.commit(ops)
+        self.book_options, self.book_stocks = options, stocks
+        self.processed.update(self.fills)
+        self.book_initialized = True
+        held_options = sum(1 for e in self.broker.values() if e["sec_type"] == "OPT")
+        held_stocks = sum(1 for e in self.broker.values() if e["sec_type"] == "STK")
+        self.set_status(
+            f"Book started from the broker: {held_options} options, {held_stocks} stocks; "
+            f"{archived} old records archived"
+        )
+        self.refresh_from_book()
+
+    def resolve_review(self, symbol):
+        item = self.review.get(symbol) or {}
+        ops, options, stocks = self.accept_broker_ops({symbol}, "resolved from review")
+        exec_ids = set(item.get("exec_ids") or [])
+        exec_ids |= {i for i, f in self.fills.items() if f["symbol"] == symbol and i not in self.processed}
+        for exec_id in exec_ids:
+            ops.append(("set", "processed", exec_id, {"symbol": symbol, "event": "resolved by hand"}))
+        ops.append(("delete", "review", symbol))
+        self.firestore.commit(ops)
+        self.book_options, self.book_stocks = options, stocks
+        self.processed.update(exec_ids)
+        self.review.pop(symbol, None)
+        self.set_status(f"Review {symbol} resolved: book counts now match the broker")
+        self.refresh_from_book()
+
+    # --- records edited by hand ----------------------------------------------
+
+    def save_option(self, old_id, fields):
+        new_id = option_id(fields["expiry"], fields["symbol"], fields["strike"], fields["right"])
+        doc = dict(self.book_options.get(old_id) or {}) if old_id else {}
+        doc.update(fields)
+        doc["secType"] = "OPT"
+        doc.setdefault("multiplier", 100.0)
+        held = self.broker.get(new_id)
+        doc["n"] = held["n"] if held else 0
+        ops = [("set", "portfolio", new_id, doc)]
+        if old_id and old_id != new_id:
+            ops.append(("delete", "portfolio", old_id))
+        self.firestore.commit(ops)
+        if old_id and old_id != new_id:
+            self.book_options.pop(old_id, None)
+        self.book_options[new_id] = doc
+        self.set_status(f"Saved {describe(doc)}")
+        self.refresh_from_book()
+        return new_id
+
+    def delete_option(self, iid):
+        held = self.broker.get(iid)
+        if held:
+            doc = dict(self.book_options.get(iid) or {})
+            doc.update({"premium": None, "startdate": datetime.date.today().strftime("%Y%m%d"),
+                        "n": held["n"]})
+            self.firestore.commit([("set", "portfolio", iid, doc)])
+            self.book_options[iid] = doc
+            self.set_status(f"{describe(doc)} is still held: premium cleared")
+        else:
+            self.firestore.commit([("delete", "portfolio", iid)])
+            self.book_options.pop(iid, None)
+            self.set_status(f"Deleted {iid}")
+        self.refresh_from_book()
+
+    def save_stock(self, old_id, fields):
+        new_id = stock_id(fields["symbol"])
+        doc = dict(self.book_stocks.get(old_id) or {}) if old_id else {}
+        doc.update(fields)
+        doc["secType"] = "STK"
+        held = self.broker.get(new_id)
+        doc["n"] = held["n"] if held else 0
+        ops = [("set", "portfolio", new_id, doc)]
+        if old_id and old_id != new_id:
+            ops.append(("delete", "portfolio", old_id))
+        self.firestore.commit(ops)
+        if old_id and old_id != new_id:
+            self.book_stocks.pop(old_id, None)
+        self.book_stocks[new_id] = doc
+        self.set_status(f"Saved {doc['symbol']} stock")
+        self.refresh_from_book()
+        return new_id
+
+    def delete_stock(self, iid):
+        held = self.broker.get(iid)
+        if held:
+            doc = dict(self.book_stocks.get(iid) or {})
+            doc.update({"avgCost": held["avg_cost"], "credit": 0.0, "n": held["n"],
+                        "startdate": datetime.date.today().strftime("%Y%m%d")})
+            self.firestore.commit([("set", "portfolio", iid, doc)])
+            self.book_stocks[iid] = doc
+            self.set_status(f"{doc.get('symbol', iid)} is still held: buy price reset, credit cleared")
+        else:
+            self.firestore.commit([("delete", "portfolio", iid)])
+            self.book_stocks.pop(iid, None)
+            self.set_status(f"Deleted {iid}")
+        self.refresh_from_book()
+
+    def update_option_fields(self, iid, fields):
+        doc = dict(self.book_options.get(iid) or {})
+        if not doc:
+            stub = self.option_portfolio.get(iid)
+            if stub is None:
+                return False
+            contract = stub.contract
+            doc = {
+                "secType": "OPT", "symbol": contract.symbol, "right": contract.right,
+                "strike": float(contract.strike), "expiry": contract.lastTradeDateOrContractMonth,
+                "multiplier": self.contract_multiplier(contract), "conId": contract.conId,
+            }
+        doc.update(fields)
+        held = self.broker.get(iid)
+        doc["n"] = held["n"] if held else 0
+        self.firestore.commit([("set", "portfolio", iid, doc)])
+        self.book_options[iid] = doc
+        self.refresh_from_book()
+        return True
+
+    def update_stock_fields(self, iid, fields):
+        doc = dict(self.book_stocks.get(iid) or {})
+        if not doc:
+            stub = self.stock_portfolio.get(iid)
+            if stub is None:
+                return False
+            doc = {"secType": "STK", "symbol": stub.contract.symbol, "credit": 0.0,
+                   "startdate": datetime.date.today().strftime("%Y%m%d")}
+        doc.update(fields)
+        held = self.broker.get(iid)
+        doc["n"] = held["n"] if held else 0
+        self.firestore.commit([("set", "portfolio", iid, doc)])
+        self.book_stocks[iid] = doc
+        self.refresh_from_book()
+        return True
+
+    def save_log(self, old_id, fields):
+        if old_id:
+            existing = next((t for t in self.log_trades if t.get("id") == old_id), {})
+            doc = {k: v for k, v in existing.items() if k != "id"}
+            doc.update(fields)
+            doc = {k: v for k, v in doc.items() if v is not None}
+            self.firestore.commit([("set", "log", old_id, doc)])
+            self.log_trades = [t for t in self.log_trades if t.get("id") != old_id]
+            self.log_trades.append(dict(doc, id=old_id))
+            log_id = old_id
+        else:
+            row = {k: v for k, v in fields.items() if v is not None}
+            ops, saved = self.log_ops([row])
+            self.firestore.commit(ops)
+            self.log_trades.extend(saved)
+            log_id = saved[0]["id"]
+        sort_log(self.log_trades)
+        self.set_status(f"Saved log row {log_id}")
+        self.refresh_from_book()
+        return log_id
+
+    def delete_log(self, log_id):
+        self.firestore.commit([("delete", "log", log_id)])
+        self.log_trades = [t for t in self.log_trades if t.get("id") != log_id]
+        self.set_status(f"Deleted log row {log_id}")
+        self.refresh_from_book()
 
     def handle_openOrder(self):
         contract = self.incoming_command["kwargs"].get("contract", None)

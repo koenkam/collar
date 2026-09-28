@@ -132,6 +132,36 @@ def is_float(number):
     except:
         return False
     return True
+
+def startdate_is_undefined(value):
+    if value is None:
+        return True
+    text = str(value).strip()
+    return text in ("", "None", "none", "nan", "NaN")
+
+def resolve_startdate(value):
+    """Return YYYYMMDD, defaulting to today when the date is not defined."""
+    if startdate_is_undefined(value):
+        return datetime.datetime.now().strftime("%Y%m%d")
+    return str(value).strip()
+
+def parse_premium(value):
+    """Parse premium input such as $ 1,450.23, $1,203.10, $231.40, 10, $10,500."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    negative = text.startswith("-")
+    if negative:
+        text = text[1:].strip()
+    text = text.replace("$", "").replace(",", "").replace(" ", "")
+    if not text:
+        raise ValueError("Premium is empty")
+    amount = float(text)
+    return -amount if negative else amount
     
 def is_float_and_not_is_int(number):
     if is_int(number):

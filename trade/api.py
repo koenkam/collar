@@ -1,6 +1,8 @@
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract, ContractDetails
+from ibapi.execution import Execution, ExecutionFilter
+from ibapi.commission_report import CommissionReport
 from ibapi.order import Order
 from ibapi.common import *
 import threading
@@ -60,6 +62,14 @@ class IBApi(EWrapper, EClient):
     
     def reqOpenOrders(self, *args, **kwargs ):
         return super().reqOpenOrders()
+
+    def reqExecutions(self, reqId, execFilter=None, **kwargs):
+        return super().reqExecutions(reqId, execFilter or ExecutionFilter())
+
+    def cancelAccountSummary(self, *args, **kwargs):
+        reqId = kwargs.get("reqId", args[0] if args else None)
+        if reqId is not None:
+            return super().cancelAccountSummary(reqId)
     
         
     def _execute_command(self):
@@ -141,9 +151,38 @@ class IBApi(EWrapper, EClient):
     def currentTime(self, time):
         return super().currentTime(time)
 
+    @auto_queue
+    def managedAccounts(self, accountsList: str):
+        self.accounts = accountsList.split(",") if accountsList else []
+        return
+
+    @auto_queue
+    def accountSummary(self, reqId: int, account: str, tag: str, value: str, currency: str):
+        if account:
+            self.account_summary.setdefault(account, {})[tag] = {
+                "value": value,
+                "currency": currency
+            }
+        return
+
+    @auto_queue
+    def accountSummaryEnd(self, reqId: int):
+        return
     
     @auto_queue
     def positionEnd(self):
+        return
+
+    @auto_queue
+    def execDetails(self, reqId: int, contract: Contract, execution: Execution):
+        return
+
+    @auto_queue
+    def execDetailsEnd(self, reqId: int):
+        return
+
+    @auto_queue
+    def commissionReport(self, commissionReport: CommissionReport):
         return
 
     @auto_queue

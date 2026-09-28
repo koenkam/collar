@@ -10,7 +10,28 @@ c=create_c()
 # load them and use them
 
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/users/koenkam/code/secrets/collar-c0dc3-firebase-adminsdk-fbsvc-92d702ce65.json"
-    
+
+BATCH_LIMIT = 450
+
+
+def log_sequence(trade):
+    if trade.get("seq") is not None:
+        return int(trade["seq"])
+    try:
+        return int(str(trade.get("id", "")).split("_")[-1])
+    except ValueError:
+        return 0
+
+
+def sort_log(trades):
+    """Newest close first, same-day rows in sequence order."""
+    trades.sort(
+        key=lambda trade: (trade.get("close_date") or "", -log_sequence(trade)),
+        reverse=True,
+    )
+    return trades
+
+
 class FirestoreDB:
 
     def __init__(self, controller):
@@ -18,174 +39,72 @@ class FirestoreDB:
         self.db = firestore.Client()
         self.option_portfolio_ref = self.db.collection('portfolio')
 
-    def get_portfolio(self):
-        docs = self.option_portfolio_ref.stream()
-        self.option_portfolio = []
-        for doc in docs:
-            data = doc.to_dict()
-            data['id'] = doc.id
-            self.option_portfolio.append(data)
-        return self.option_portfolio
+    def get_summary(self):
+        doc = self.db.collection("summary").document("collar").get()
+        if not doc.exists:
+            return {"start_date": "", "value_start": None}
+        data = doc.to_dict() or {}
+        return {
+            "start_date": data.get("start_date") or "",
+            "value_start": data.get("value_start"),
+        }
 
-   
-    def merge_stock_item(self, instrument_id):
-        position_doc = self.option_portfolio_ref.document(instrument_id)
-        doc = position_doc.get()
-        portfolio = self.controller.stock_portfolio
-        if doc.exists:
-            position_data = doc.to_dict()
-            portfolio[instrument_id].avgCost = position_data.get('avgCost')
-            portfolio[instrument_id].lastPrice = position_data.get('lastPrice', 0)
-            portfolio[instrument_id].startdate = position_data.get('startdate')
-       
-        else:
-            # Create new document
-            position_data = {
-                'avgCost': 0,
-                'startdate': datetime.datetime.now().strftime("%Y%m%d"),
-                'symbol': portfolio[instrument_id].contract.symbol,
-                'secType': portfolio[instrument_id].contract.secType,
-                'n': portfolio[instrument_id].n,
-                'conId': portfolio[instrument_id].contract.conId,
-                'lastPrice': 0
+    def get_log(self):
+        trades = []
+        for doc in self.db.collection("log").stream():
+            data = doc.to_dict() or {}
+            data["id"] = doc.id
+            trades.append(data)
+        return sort_log(trades)
 
-            }
-            position_doc.set(position_data)
-
-    def merge_portfolio_item(self, instrument_id):
-        position_doc = self.option_portfolio_ref.document(instrument_id)
-        portfolio = self.controller.option_portfolio
-        doc = position_doc.get()
-        if doc.exists:
-            position_data = doc.to_dict()
-            portfolio[instrument_id].premium = position_data.get('premium')
-            portfolio[instrument_id].startdate = position_data.get('startdate')
-            portfolio[instrument_id].lastPrice = position_data.get('lastPrice', 0)
-            portfolio[instrument_id].underlyingPrice = position_data.get('underlyingPrice', 0)
-       
-        else:
-            # Create new document
-            position_data = {
-                'premium': 0,
-                'startdate': datetime.datetime.now().strftime("%Y%m%d"),
-                'symbol': portfolio[instrument_id].contract.symbol,
-                'secType': portfolio[instrument_id].contract.secType,
-                'right': portfolio[instrument_id].contract.right,
-                'strike': portfolio[instrument_id].contract.strike,
-                'expiry': portfolio[instrument_id].contract.lastTradeDateOrContractMonth,
-                'n': portfolio[instrument_id].n,
-                'avgCost': portfolio[instrument_id].avgCost,
-                'conId': portfolio[instrument_id].contract.conId,
-                'lastPrice': 0
-
-            }
-            position_doc.set(position_data)
-
-    def update_position(self, instrument_id, start_value=None, premium_value=None):
-        """Update start and premium values for a position in Firestore"""
-        try:
-            position_doc = self.option_portfolio_ref.document(instrument_id)
-            doc = position_doc.get()
-            
-            if doc.exists:
-                # Document exists - update it
-                update_data = {}
-                
-                if start_value is not None:
-                    update_data['startdate'] = start_value
-                
-                if premium_value is not None:
-                    update_data['premium'] = float(premium_value)
-                
-                if update_data:  # Only update if there's data to update
-                    position_doc.update(update_data)
-                    return True
-                else:
-                    return False
+    def load_book(self):
+        """Option and stock documents, keyed by instrument id."""
+        options, stocks = {}, {}
+        for doc in self.option_portfolio_ref.stream():
+            data = doc.to_dict() or {}
+            if data.get("secType") == "STK" or doc.id.startswith("STK_"):
+                stocks[doc.id] = data
             else:
-                # Document doesn't exist - create it with basic info
-                portfolio = self.controller.option_portfolio  # Changed from portfolio to option_portfolio
-                if instrument_id in portfolio:
-                    position = portfolio[instrument_id]
-                    position_data = {
-                        'premium': float(premium_value) if premium_value else 0,
-                        'startdate': start_value if start_value else datetime.datetime.now().strftime("%Y%m%d"),
-                        'symbol': position.contract.symbol,
-                        'secType': position.contract.secType,
-                        'right': position.contract.right,
-                        'strike': position.contract.strike,
-                        'expiry': position.contract.lastTradeDateOrContractMonth,
-                        'n': position.n,
-                        'avgCost': position.avgCost,
-                        'conId': position.contract.conId,
-                        'lastPrice': 0
-                    }
-                    position_doc.set(position_data)
-                    print(f"Created new Firestore document {instrument_id} with {position_data}")
-                    return True
-                else:
-                    print(f"Position {instrument_id} not found in option_portfolio")
-                    return False
-                    
-        except Exception as e:
-            print(f"Error updating Firestore for {instrument_id}: {e}")
-            return False
+                options[doc.id] = data
+        return options, stocks
 
-    def update_stock_position(self, instrument_id, start_value=None, avg_cost=None):
-        """Update start and avgCost values for a stock position in Firestore"""
-        try:
-            position_doc = self.option_portfolio_ref.document(instrument_id)
-            doc = position_doc.get()
-            
-            if doc.exists:
-                # Document exists - update it
-                update_data = {}
-                
-                if start_value is not None:
-                    update_data['startdate'] = start_value
-                
-                if avg_cost is not None:
-                    update_data['avgCost'] = float(avg_cost)
-                
-                if update_data:  # Only update if there's data to update
-                    position_doc.update(update_data)
-                    return True
-                else:
-                    return False
-            else:
-                # Document doesn't exist - create it with basic info
-                portfolio = self.controller.stock_portfolio
-                if instrument_id in portfolio:
-                    position = portfolio[instrument_id]
-                    position_data = {
-                        'avgCost': float(avg_cost) if avg_cost else position.avgCost,
-                        'startdate': start_value if start_value else datetime.datetime.now().strftime("%Y%m%d"),
-                        'symbol': position.contract.symbol,
-                        'secType': position.contract.secType,
-                        'n': position.n,
-                        'conId': position.contract.conId,
-                        'lastPrice': 0
-                    }
-                    position_doc.set(position_data)
-                    print(f"Created new Firestore document {instrument_id} with {position_data}")
-                    return True
-                else:
-                    print(f"Position {instrument_id} not found in stock_portfolio")
-                    return False
-                    
-        except Exception as e:
-            print(f"Error updating Firestore for {instrument_id}: {e}")
-            return False
+    def load_processed(self):
+        return {doc.id for doc in self.db.collection("processed").stream()}
 
+    def load_review(self):
+        return {doc.id: doc.to_dict() or {} for doc in self.db.collection("review").stream()}
+
+    def is_initialized(self):
+        doc = self.db.collection("summary").document("book").get()
+        return doc.exists and bool((doc.to_dict() or {}).get("initialized"))
+
+    def commit(self, ops):
+        """Write ("set", collection, id, data) and ("delete", collection, id) together.
+
+        Up to BATCH_LIMIT operations are one atomic batch. Longer lists are
+        only written by the one-time start of the book.
+        """
+        for start in range(0, len(ops), BATCH_LIMIT):
+            batch = self.db.batch()
+            for op in ops[start:start + BATCH_LIMIT]:
+                ref = self.db.collection(op[1]).document(op[2])
+                if op[0] == "set":
+                    batch.set(ref, op[3])
+                else:
+                    batch.delete(ref)
+            batch.commit()
 
     def save_current_prices(self):
         """Save current prices for all positions to Firestore"""
         try:
             batch = self.db.batch()
             count = 0
-            
+            known = set(self.controller.book_options) | set(self.controller.book_stocks)
+
             # Update options
-            for instrument_id, position in self.controller.option_portfolio.items():
+            for instrument_id, position in list(self.controller.option_portfolio.items()):
+                if instrument_id not in known:
+                    continue
                 ref = self.option_portfolio_ref.document(instrument_id)
                 updates = {}
                 if hasattr(position, 'lastPrice') and position.lastPrice is not None and position.lastPrice != 0:
@@ -202,7 +121,9 @@ class FirestoreDB:
                         count = 0
 
             # Update stocks
-            for instrument_id, position in self.controller.stock_portfolio.items():
+            for instrument_id, position in list(self.controller.stock_portfolio.items()):
+                if instrument_id not in known:
+                    continue
                 ref = self.option_portfolio_ref.document(instrument_id)
                 updates = {}
                 if hasattr(position, 'lastPrice') and position.lastPrice is not None and position.lastPrice != 0:

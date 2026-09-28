@@ -4,8 +4,16 @@ import os
 
 
 def general(c):
-    c.scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    c.scope = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+        "https://spreadsheets.google.com/feeds",
+    ]
     c.save_interval_minutes = 15
+    c.collar_spreadsheet_id = "1nkMsXbtqrWiFzX5-gkzOT1UtFsFCmJpHeOl-MtjXGNo"
+    c.collar_spreadsheet_title = "The collar"
+    c.collar_worksheet_name = "Log"
+    c.collar_account_cell = "P5"
     return c
 
 def find_project_root(start_path=None):
@@ -36,8 +44,15 @@ def gui(c):
     c.portfolio_int_columns = ["N", "Days", "DIT", "DTE", "Order_n"]
     c.portfolio_columns_left = ["Symbol", "Type"]
     c.itm_threshold = 2.0  # ITM% threshold to consider option ITM
-    c.stock_labels = ["Symbol", "N", "Buy","Last", "Profit"]
+    c.stock_labels = ["Symbol", "N", "Buy", "Break-even", "Date", "Last", "Profit"]
     c.stock_columns_left = ["Symbol"]
+    c.portfolio_visible_rows = 8
+    c.stock_visible_rows = 4
+    c.log_labels = [
+        "Open", "Type", "Symbol", "#", "Strike", "Price", "Expiry",
+        "Com", "Premium", "Assign", "Close", "Close px", "Close com", "Profit",
+    ]
+    c.log_columns_left = ["Open", "Type", "Symbol", "Expiry", "Close"]
     return c
 
 def path(c):
@@ -54,6 +69,9 @@ def wheel(c):
         'AMD'
     ]
     c.default_exchange = 'CBOE'
+    c.cash_settled_symbols = {'SPX', 'XSP', 'NDX', 'RUT', 'VIX'}
+    c.book_settle_seconds = 60
+    c.roll_window_seconds = 15 * 60
     return c
 
 def make_c():

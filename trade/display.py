@@ -1,5 +1,7 @@
 import datetime
 from config import create_c
+from .book import breakeven
+from .logbook import format_yyyymmdd
 c=create_c()
 
 class Displayer:
@@ -17,7 +19,19 @@ class Displayer:
         elif required_rows < current_rows:
             grid.DeleteRows(0, current_rows - required_rows)
 
+    def sync_rows(self, grid, portfolio, portfolio_gui_map):
+        """Renumber rows when a position leaves, so no row is left behind."""
+        if set(portfolio_gui_map) - set(portfolio) or not portfolio_gui_map and portfolio:
+            portfolio_gui_map.clear()
+            for row, instrument_id in enumerate(portfolio):
+                portfolio_gui_map[instrument_id] = row
+            grid.ClearGrid()
+
     def updatePortfolioDisplay(self):
+        self.sync_rows(self.mainframe.grid_portfolio, self.controller.option_portfolio,
+                       self.controller.option_portfolio_gui_map)
+        self.sync_rows(self.mainframe.grid_stock, self.controller.stock_portfolio,
+                       self.controller.stock_portfolio_gui_map)
         self.adjust_grid(self.mainframe.grid_portfolio,self.controller.option_portfolio)
         self.adjust_grid(self.mainframe.grid_stock,self.controller.stock_portfolio)
         self.update_option_display()
@@ -40,14 +54,23 @@ class Displayer:
                 portfolio_gui_map[instrument_id] = row
             
             lastPrice = position.lastPrice if hasattr(position, 'lastPrice') and position.lastPrice is not None and position.lastPrice >= 0 else 0.0
-            pl = (lastPrice - position.avgCost) * position.n if hasattr(position, 'avgCost') and position.avgCost is not None else 0.0
+            avg_cost = position.avgCost if getattr(position, 'avgCost', None) is not None else 0.0
+            be = breakeven({
+                "n": position.n,
+                "avgCost": avg_cost,
+                "credit": getattr(position, 'credit', 0.0),
+            })
+            pl = (lastPrice - be) * position.n if lastPrice else 0.0
+            startdate = getattr(position, 'startdate', "")
 
             output = [
                 contract.symbol,
                 position.n,
-                position.avgCost,
+                round(float(avg_cost), 2),
+                round(be, 2),
+                format_yyyymmdd(startdate) if startdate else "",
                 lastPrice,
-                pl
+                round(pl, 2)
             ]
             display_list = []
             for i, value in enumerate(output):
@@ -89,7 +112,7 @@ class Displayer:
                 opttype = contract.secType
                 optexpire = ""
             
-            startdate = position.startdate if hasattr(position, 'startdate') else ""
+            startdate = position.startdate if getattr(position, 'startdate', None) else ""
             lastPrice = position.lastPrice if hasattr(position, 'lastPrice') and position.lastPrice is not None and position.lastPrice >= 0 else 0.0
             buyback = lastPrice * position.n * 100
             premium = position.premium if hasattr(position, 'premium') \

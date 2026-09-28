@@ -9,6 +9,9 @@ from .api import IBApi
 from config import create_c
 from .controller import Controller
 from .display import Displayer
+from util import parse_premium, resolve_startdate
+from .logbook import compute_collar_totals, format_log_row, format_totals, short_put_notional
+from .records_ui import RecordsDialog
 c=create_c()
 
 class EditPositionDialog(wx.Dialog):
@@ -46,7 +49,7 @@ class EditPositionDialog(wx.Dialog):
         # Start value input
         hbox1 = wx.BoxSizer(wx.HORIZONTAL)
         lbl_start = wx.StaticText(panel, label="Start:")
-        self.txt_start = wx.TextCtrl(panel, value=str(self.start_value))
+        self.txt_start = wx.TextCtrl(panel, value=resolve_startdate(self.start_value))
         hbox1.Add(lbl_start, flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=8)
         hbox1.Add(self.txt_start, proportion=1)
         
@@ -79,23 +82,30 @@ class EditPositionDialog(wx.Dialog):
     
     def on_save(self, event):
         """Handle save button click"""
-        start_value = self.txt_start.GetValue().strip()
-        premium_value = self.txt_premium.GetValue().strip()
+        start_value = resolve_startdate(self.txt_start.GetValue())
+        premium_raw = self.txt_premium.GetValue()
         
-        # Validate premium value
         try:
-            if premium_value:
-                float(premium_value)  # Test if it's a valid number
+            premium_value = parse_premium(premium_raw)
         except ValueError:
-            wx.MessageBox("Premium must be a valid number", "Invalid Input", wx.OK | wx.ICON_ERROR)
+            wx.MessageBox(
+                "Premium must be a valid number, for example: $ 1,450.23, $1,203.10, $231.40, 10, $10,500",
+                "Invalid Input",
+                wx.OK | wx.ICON_ERROR
+            )
             return
         
-        # Save to Firestore - use 'firestore' instead of 'firestoredb'
-        success = self.controller.firestore.update_position(
-            self.instrument_id, 
-            start_value if start_value else None,
-            premium_value if premium_value else None
-        )
+        self._saved_start = start_value
+        self._saved_premium = premium_value
+        
+        fields = {"startdate": start_value}
+        if premium_value is not None:
+            fields["premium"] = premium_value
+        try:
+            success = self.controller.update_option_fields(self.instrument_id, fields)
+        except Exception as e:
+            print(f"Error saving {self.instrument_id}: {e}")
+            success = False
         
         if success:
             # Close dialog with OK result
@@ -105,12 +115,12 @@ class EditPositionDialog(wx.Dialog):
         
     def get_values(self):
         """Return the entered values"""
+        start = getattr(self, "_saved_start", resolve_startdate(self.txt_start.GetValue()))
         try:
-            start = self.txt_start.GetValue()
-            premium = self.txt_premium.GetValue()
-            return start, premium
+            premium = getattr(self, "_saved_premium", parse_premium(self.txt_premium.GetValue()))
         except ValueError:
             return None, None
+        return start, premium
 
 class EditStockDialog(wx.Dialog):
     def __init__(self, parent, controller, symbol="", instrument_id="", avg_cost=""):
@@ -181,12 +191,14 @@ class EditStockDialog(wx.Dialog):
             wx.MessageBox("Buy Price must be a valid number", "Invalid Input", wx.OK | wx.ICON_ERROR)
             return
         
-        # Save to Firestore
-        success = self.controller.firestore.update_stock_position(
-            self.instrument_id, 
-            None, # start_value
-            avg_cost if avg_cost else 0
-        )
+        try:
+            success = self.controller.update_stock_fields(
+                self.instrument_id,
+                {"avgCost": float(avg_cost) if avg_cost else 0.0},
+            )
+        except Exception as e:
+            print(f"Error saving {self.instrument_id}: {e}")
+            success = False
         
         if success:
             # Close dialog with OK result
@@ -224,9 +236,11 @@ class MainFrame(wx.Frame):
         
         # Add time display panel at the top
         self.render_time_display()
+        self.render_totals()
         
         self.render_portfolio()
         self.render_stock()
+        self.render_log()
 
         self.panel.SetSizer(self.vbox)
         self.Centre()
@@ -247,18 +261,103 @@ class MainFrame(wx.Frame):
         self.time_display.SetFont(font)
         self.time_display.SetForegroundColour(wx.Colour(0, 255, 0))
         
+        self.account_label = wx.StaticText(self.panel, label="Account: ")
+        self.account_display = wx.StaticText(self.panel, label="Loading...")
+        self.account_display.SetFont(font)
+        self.account_display.SetForegroundColour(wx.Colour(0, 255, 0))
+        
         # Add to horizontal sizer
         time_hbox.Add(self.time_label, flag=wx.ALIGN_CENTER_VERTICAL)
         time_hbox.Add(self.time_display, flag=wx.ALIGN_CENTER_VERTICAL)
         
-        # Add spacer to push time to the right
+        # Add spacer to push account value to the right
         time_hbox.AddStretchSpacer()
+        
+        time_hbox.Add(self.account_label, flag=wx.ALIGN_CENTER_VERTICAL)
+        time_hbox.Add(self.account_display, flag=wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, border=10)
         
         # Add to main vertical sizer
         self.vbox.Add(time_hbox, flag=wx.EXPAND|wx.ALL, border=10)
         
         # Update time display immediately
         self.update_time_display()
+        self.update_account_display()
+
+    def render_totals(self):
+        """Fixed strip for the Log totals. Current value stays in the account label."""
+        self.totals_line1 = wx.StaticText(self.panel, label="")
+        self.totals_line2 = wx.StaticText(self.panel, label="")
+        font = self.totals_line1.GetFont()
+        font.SetPointSize(11)
+        self.totals_line1.SetFont(font)
+        self.totals_line2.SetFont(font)
+        self._totals_text = None
+        self.vbox.Add(self.totals_line1, flag=wx.LEFT | wx.RIGHT | wx.TOP, border=10)
+        self.vbox.Add(self.totals_line2, flag=wx.EXPAND | wx.LEFT | wx.RIGHT, border=10)
+
+        status_hbox = wx.BoxSizer(wx.HORIZONTAL)
+        self.status_text = wx.StaticText(self.panel, label="", style=wx.ST_ELLIPSIZE_END)
+        self.btn_review = wx.Button(self.panel, label="Review")
+        self.btn_records = wx.Button(self.panel, label="Records")
+        self.btn_review.Bind(wx.EVT_BUTTON, lambda event: self.open_records("review"))
+        self.btn_records.Bind(wx.EVT_BUTTON, lambda event: self.open_records("options"))
+        status_hbox.Add(self.status_text, proportion=1, flag=wx.ALIGN_CENTER_VERTICAL)
+        status_hbox.Add(self.btn_review, flag=wx.LEFT, border=8)
+        status_hbox.Add(self.btn_records, flag=wx.LEFT, border=8)
+        self.vbox.Add(status_hbox, flag=wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, border=10)
+        self._status_text = None
+        self.update_totals_display()
+        self.update_status()
+
+    def update_status(self):
+        text = getattr(self.controller, "status_message", "") or ""
+        reviews = len(getattr(self.controller, "review", {}) or {})
+        state = (text, reviews)
+        if state == self._status_text:
+            return
+        self._status_text = state
+        self.status_text.SetLabel(text)
+        self.status_text.SetToolTip(text)
+        self.btn_review.SetLabel(f"Review ({reviews})")
+        self.btn_review.Show(reviews > 0)
+        self.panel.Layout()
+
+    def refresh_book_views(self):
+        self.fill_log_grid()
+        self.update_totals_display()
+        self.update_status()
+
+    def open_records(self, page):
+        self.controller.book_paused = True
+        try:
+            dialog = RecordsDialog(self, self.controller, page)
+            dialog.ShowModal()
+            dialog.Destroy()
+        finally:
+            self.controller.book_paused = False
+            self.controller.schedule_book()
+
+    def update_totals_display(self):
+        totals = compute_collar_totals(
+            getattr(self.controller, "summary", None),
+            getattr(self.controller, "log_trades", None),
+            getattr(self.controller, "account_value", None),
+            short_put_notional(getattr(self.controller, "option_portfolio", None)),
+        )
+        line1, line2 = format_totals(totals)
+        text = (line1, line2)
+        if text == self._totals_text:
+            return
+        self._totals_text = text
+        self.totals_line1.SetLabel(line1)
+        self.totals_line2.SetLabel(line2)
+        self.panel.Layout()
+
+    def _lock_grid_height(self, grid, visible_rows):
+        """Keep a grid at a fixed height so extra window space goes to the log."""
+        height = grid.GetColLabelSize() + visible_rows * grid.GetDefaultRowSize() + 4
+        grid.SetMinSize(wx.Size(200, height))
+        grid.SetMaxSize(wx.Size(-1, height))
 
     def update_time_display(self):
         """Update the time display with current Eastern time"""
@@ -275,12 +374,25 @@ class MainFrame(wx.Frame):
         except Exception as e:
             self.time_display.SetLabel("Time Error")
 
+    def update_account_display(self):
+        """Update the account value display from the IB account summary"""
+        value = getattr(self.controller, "account_value", None)
+        if value is None:
+            self.account_display.SetLabel("Loading...")
+            return
+        currency = getattr(self.controller, "account_currency", "USD") or "USD"
+        if currency == "USD":
+            self.account_display.SetLabel(f"${value:,.2f}")
+        else:
+            self.account_display.SetLabel(f"{value:,.2f} {currency}")
+        self.panel.Layout()
+
     def render_portfolio(self):
         hbox0 = wx.BoxSizer(wx.HORIZONTAL)
         lbl_portfolio = wx.StaticText(self.panel, label='Options')
         hbox0.Add(lbl_portfolio, flag=wx.RIGHT, border=8)        
         self.grid_portfolio = wx.grid.Grid(self.panel)
-        self.grid_portfolio.CreateGrid(5, len(c.portfolio_labels))
+        self.grid_portfolio.CreateGrid(c.portfolio_visible_rows, len(c.portfolio_labels))
         for col, label in enumerate(c.portfolio_labels):
             self.grid_portfolio.SetColLabelValue(col, label)
     
@@ -304,8 +416,9 @@ class MainFrame(wx.Frame):
         self.grid_portfolio.Bind(wx.grid.EVT_GRID_CELL_LEFT_CLICK, self.on_portfolio_cell_click)
     
         self.grid_portfolio.AutoSizeColumns()
+        self._lock_grid_height(self.grid_portfolio, c.portfolio_visible_rows)
         self.vbox.Add(hbox0, flag=wx.EXPAND|wx.LEFT|wx.RIGHT|wx.TOP, border=10)
-        self.vbox.Add(self.grid_portfolio, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
+        self.vbox.Add(self.grid_portfolio, proportion=0, flag=wx.EXPAND|wx.ALL, border=10)
 
     def on_portfolio_cell_click(self, event):
         """Handle click on portfolio grid cell"""
@@ -339,18 +452,13 @@ class MainFrame(wx.Frame):
             # User clicked Save - data was already saved to Firestore
             start, premium = dialog.get_values()
             
-            if start is not None and premium is not None:
-                # Update the grid display
-                if start_col is not None:
-                    self.grid_portfolio.SetCellValue(row, start_col, str(start))
-                if premium_col is not None:
-                    self.grid_portfolio.SetCellValue(row, premium_col, str(premium))
-                
-                # Update the controller/position data
-                self.update_position_data(row, start, premium)
-                
-                # Refresh the grid
-                self.grid_portfolio.ForceRefresh()
+            if start is not None and start_col is not None:
+                self.grid_portfolio.SetCellValue(row, start_col, str(start))
+            if premium is not None and premium_col is not None:
+                self.grid_portfolio.SetCellValue(row, premium_col, str(premium))
+            
+            self.update_position_data(row, start, premium)
+            self.grid_portfolio.ForceRefresh()
         
         dialog.Destroy()
         event.Skip()  # Allow normal grid processing
@@ -374,7 +482,7 @@ class MainFrame(wx.Frame):
             try:
                 if start:
                     position.startdate = start
-                if premium:
+                if premium is not None:
                     position.premium = float(premium)
                 
                 position.dirty = True
@@ -390,7 +498,7 @@ class MainFrame(wx.Frame):
     def render_stock(self):
         lbl_stock = wx.StaticText(self.panel, label='Stock')
         self.grid_stock = wx.grid.Grid(self.panel)
-        self.grid_stock.CreateGrid(5, len(c.stock_labels))
+        self.grid_stock.CreateGrid(c.stock_visible_rows, len(c.stock_labels))
         for col, label in enumerate(c.stock_labels):
             self.grid_stock.SetColLabelValue(col, label)
             if label in c.stock_columns_left:
@@ -399,9 +507,10 @@ class MainFrame(wx.Frame):
                 self.grid_stock.SetColAttr(col, attr)
             else:
                 self.grid_stock.SetColFormatNumber(col)
+        self._lock_grid_height(self.grid_stock, c.stock_visible_rows)
         #add all elements to self.vbox
         self.vbox.Add(lbl_stock, flag=wx.LEFT, border=8)
-        self.vbox.Add(self.grid_stock, proportion=1, flag=wx.EXPAND|wx.ALL, border=10)
+        self.vbox.Add(self.grid_stock, proportion=0, flag=wx.EXPAND|wx.ALL, border=10)
         
         # Bind grid cell click event
         self.grid_stock.Bind(wx.grid.EVT_GRID_CELL_LEFT_CLICK, self.on_stock_cell_click)
@@ -472,6 +581,37 @@ class MainFrame(wx.Frame):
         dialog.Destroy()
         event.Skip()  # Allow normal grid processing
 
+    def render_log(self):
+        lbl_log = wx.StaticText(self.panel, label="Log")
+        self.grid_log = wx.grid.Grid(self.panel)
+        self.grid_log.CreateGrid(0, len(c.log_labels))
+        self.grid_log.EnableEditing(False)
+        for col, label in enumerate(c.log_labels):
+            self.grid_log.SetColLabelValue(col, label)
+            attr = wx.grid.GridCellAttr()
+            attr.SetReadOnly(True)
+            if label in c.log_columns_left:
+                attr.SetAlignment(wx.ALIGN_LEFT, wx.ALIGN_CENTER)
+            else:
+                attr.SetAlignment(wx.ALIGN_RIGHT, wx.ALIGN_CENTER)
+            self.grid_log.SetColAttr(col, attr)
+        self.vbox.Add(lbl_log, flag=wx.LEFT | wx.TOP, border=8)
+        self.vbox.Add(self.grid_log, proportion=1, flag=wx.EXPAND | wx.ALL, border=10)
+        self.fill_log_grid()
+
+    def fill_log_grid(self):
+        trades = getattr(self.controller, "log_trades", None) or []
+        grid = self.grid_log
+        current = grid.GetNumberRows()
+        if current:
+            grid.DeleteRows(0, current)
+        if trades:
+            grid.AppendRows(len(trades))
+        for row, trade in enumerate(trades):
+            for col, value in enumerate(format_log_row(trade)):
+                grid.SetCellValue(row, col, value)
+        grid.AutoSizeColumns()
+
     def update_stock_data(self, row, cost):
         """Update the stock position data in the controller"""
         # Use the controller method to get the instrument_id
@@ -505,6 +645,7 @@ class MainFrame(wx.Frame):
 
     def on_timer(self, event):
         self.controller.process_incoming_data()
+        self.controller.tick()
         status = self.controller.get_connection_status()        
         self.SetTitle(f"The Collar - {status}")
         
@@ -514,5 +655,7 @@ class MainFrame(wx.Frame):
             self.last_save_time = current_time
             threading.Thread(target=self.controller.firestore.save_current_prices).start()
         
-        # Update time display
+        # Update time and account displays
         self.update_time_display()
+        self.update_account_display()
+        self.update_totals_display()
