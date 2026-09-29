@@ -12,6 +12,7 @@ from .display import Displayer
 from util import parse_premium, resolve_startdate
 from .logbook import compute_collar_totals, format_log_row, format_totals, short_put_notional
 from .records_ui import RecordsDialog
+from .screener_ui import SellPutsFrame, WatchlistDialog, accelerator as screener_accelerator
 c=create_c()
 
 class EditPositionDialog(wx.Dialog):
@@ -22,6 +23,14 @@ class EditPositionDialog(wx.Dialog):
         self.symbol = symbol
         self.instrument_id = instrument_id
         self.start_value = start_value
+        position = controller.option_portfolio.get(instrument_id)
+        self.is_long = bool(position is not None and (position.n or 0) > 0)
+        if self.is_long:
+            try:
+                paid = parse_premium(premium_value)
+            except ValueError:
+                paid = None
+            premium_value = "" if paid is None else f"{abs(paid):.2f}"
         self.premium_value = premium_value
         
         self.init_ui()
@@ -55,7 +64,7 @@ class EditPositionDialog(wx.Dialog):
         
         # Premium value input
         hbox2 = wx.BoxSizer(wx.HORIZONTAL)
-        lbl_premium = wx.StaticText(panel, label="Premium:")
+        lbl_premium = wx.StaticText(panel, label="Paid:" if self.is_long else "Premium:")
         self.txt_premium = wx.TextCtrl(panel, value=str(self.premium_value))
         hbox2.Add(lbl_premium, flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=8)
         hbox2.Add(self.txt_premium, proportion=1)
@@ -94,6 +103,8 @@ class EditPositionDialog(wx.Dialog):
                 wx.OK | wx.ICON_ERROR
             )
             return
+        if self.is_long and premium_value is not None:
+            premium_value = -abs(premium_value)
         
         self._saved_start = start_value
         self._saved_premium = premium_value
@@ -116,10 +127,14 @@ class EditPositionDialog(wx.Dialog):
     def get_values(self):
         """Return the entered values"""
         start = getattr(self, "_saved_start", resolve_startdate(self.txt_start.GetValue()))
+        if hasattr(self, "_saved_premium"):
+            return start, self._saved_premium
         try:
-            premium = getattr(self, "_saved_premium", parse_premium(self.txt_premium.GetValue()))
+            premium = parse_premium(self.txt_premium.GetValue())
         except ValueError:
             return None, None
+        if self.is_long and premium is not None:
+            premium = -abs(premium)
         return start, premium
 
 class EditStockDialog(wx.Dialog):
@@ -221,6 +236,7 @@ class MainFrame(wx.Frame):
         self.controller = controller
         self.controller.mainframe = self  # Set the mainframe reference in controller
         self.controller.displayer = Displayer(self.controller)  # Initialize Displayer
+        self.screener_frame = None
         self.init_ui()
         
         self.last_save_time = 0
@@ -243,7 +259,22 @@ class MainFrame(wx.Frame):
         self.render_log()
 
         self.panel.SetSizer(self.vbox)
+        self.render_menu()
         self.Centre()
+
+    def render_menu(self):
+        menubar = wx.MenuBar()
+        trade = wx.Menu()
+        sell = trade.Append(wx.ID_ANY, f"Sell puts...\t{screener_accelerator()}")
+        watchlist = trade.Append(wx.ID_ANY, "Watchlist...")
+        records = trade.Append(wx.ID_ANY, "Records...")
+        review = trade.Append(wx.ID_ANY, "Review...")
+        self.Bind(wx.EVT_MENU, self.open_screener, sell)
+        self.Bind(wx.EVT_MENU, self.open_watchlist, watchlist)
+        self.Bind(wx.EVT_MENU, lambda event: self.open_records("options"), records)
+        self.Bind(wx.EVT_MENU, lambda event: self.open_records("review"), review)
+        menubar.Append(trade, "&Trade")
+        self.SetMenuBar(menubar)
 
     def render_time_display(self):
         """Create and add the time display panel"""
@@ -299,9 +330,12 @@ class MainFrame(wx.Frame):
         self.status_text = wx.StaticText(self.panel, label="", style=wx.ST_ELLIPSIZE_END)
         self.btn_review = wx.Button(self.panel, label="Review")
         self.btn_records = wx.Button(self.panel, label="Records")
+        self.btn_screener = wx.Button(self.panel, label="Sell puts")
         self.btn_review.Bind(wx.EVT_BUTTON, lambda event: self.open_records("review"))
         self.btn_records.Bind(wx.EVT_BUTTON, lambda event: self.open_records("options"))
+        self.btn_screener.Bind(wx.EVT_BUTTON, self.open_screener)
         status_hbox.Add(self.status_text, proportion=1, flag=wx.ALIGN_CENTER_VERTICAL)
+        status_hbox.Add(self.btn_screener, flag=wx.LEFT, border=8)
         status_hbox.Add(self.btn_review, flag=wx.LEFT, border=8)
         status_hbox.Add(self.btn_records, flag=wx.LEFT, border=8)
         self.vbox.Add(status_hbox, flag=wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, border=10)
@@ -326,6 +360,22 @@ class MainFrame(wx.Frame):
         self.fill_log_grid()
         self.update_totals_display()
         self.update_status()
+
+    def open_screener(self, event=None):
+        if self.screener_frame:
+            self.screener_frame.Show()
+            self.screener_frame.Raise()
+            self.screener_frame.refresh()
+            return
+        self.screener_frame = SellPutsFrame(self, self.controller)
+        self.screener_frame.Show()
+
+    def open_watchlist(self, event=None):
+        dialog = WatchlistDialog(self, self.controller)
+        dialog.ShowModal()
+        dialog.Destroy()
+        if self.screener_frame:
+            self.screener_frame.refresh()
 
     def open_records(self, page):
         self.controller.book_paused = True

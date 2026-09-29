@@ -28,6 +28,9 @@ class Displayer:
             grid.ClearGrid()
 
     def updatePortfolioDisplay(self):
+        if getattr(self.controller, "display_batching", False):
+            self.controller.display_pending = True
+            return
         self.sync_rows(self.mainframe.grid_portfolio, self.controller.option_portfolio,
                        self.controller.option_portfolio_gui_map)
         self.sync_rows(self.mainframe.grid_stock, self.controller.stock_portfolio,
@@ -135,18 +138,22 @@ class Displayer:
             ppd_now = pl /dit
             
             underlying = position.underlyingPrice if hasattr(position, 'underlyingPrice') else ""
+            assignable = contract.symbol not in c.cash_settled_symbols and position.n < 0
             if underlying and strike and contract.secType == 'OPT':
+                if contract.right == 'C':
+                    itm_percentage = (strike - underlying) / strike * 100
+                else:
+                    itm_percentage = (underlying - strike) / strike * 100
+            else:
+                itm_percentage = ""
+            if underlying and strike and contract.secType == 'OPT' and assignable:
                 assignvalue = -lastPrice * position.n * 100
                 if contract.right == 'C':
                     assignvalue += (underlying - strike) * position.n * 100
-                    itm_percentage = (strike - underlying) / strike * 100
                 else:
                     assignvalue += (strike - underlying) * position.n * 100
-                    itm_percentage = (underlying - strike) / strike * 100
-                
             else:
                 assignvalue = ""
-                itm_percentage = ""
 
             position.closeat = (premium- dit * ppd)/ 100 / abs(position.n) if position.n != 0 else 0.0
             #print(position.closeat, premium, dit, ppd, position.n)

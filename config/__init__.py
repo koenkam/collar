@@ -74,6 +74,29 @@ def wheel(c):
     c.roll_window_seconds = 15 * 60
     return c
 
+def screener(c):
+    c.screener_symbols = [
+        'AMZN', 'GOOGL', 'AMD', 'SHOP', 'NVDA', 'ANET', 'RDDT',
+        'JPM', 'KO', 'BAC', 'PYPL', 'RCL', 'V', 'HIMS', 'PANW',
+        'MSFT', 'AAPL', 'NFLX', 'META', 'AXP', 'MU', 'AVGO',
+    ]
+    c.screener_target_delta = 0.25
+    c.screener_delta_band = (0.20, 0.30)
+    c.screener_candidate_band = (0.12, 0.40)
+    c.screener_min_sessions = 5
+    c.screener_max_spread = 0.10
+    c.screener_min_open_interest = 100
+    c.screener_fill_fraction = 0.25
+    c.screener_rescan_minutes = 15
+    c.option_commission = 0.50
+    c.market_holidays = {
+        '20260101', '20260119', '20260216', '20260403', '20260525', '20260619',
+        '20260703', '20260907', '20261126', '20261225',
+        '20270101', '20270118', '20270215', '20270326', '20270531', '20270618',
+        '20270705', '20270906', '20271125', '20271224',
+    }
+    return c
+
 def make_c():
     c = Stub()
   
@@ -82,6 +105,7 @@ def make_c():
             general,
             path,
             wheel,
+            screener,
             gui
         ]:
         c = f(c)

@@ -66,6 +66,9 @@ class IBApi(EWrapper, EClient):
     def reqExecutions(self, reqId, execFilter=None, **kwargs):
         return super().reqExecutions(reqId, execFilter or ExecutionFilter())
 
+    def reqMarketDataType(self, marketDataType, **kwargs):
+        return super().reqMarketDataType(marketDataType)
+
     def cancelAccountSummary(self, *args, **kwargs):
         reqId = kwargs.get("reqId", args[0] if args else None)
         if reqId is not None:
@@ -186,6 +189,28 @@ class IBApi(EWrapper, EClient):
         return
 
     @auto_queue
+    def contractDetails(self, reqId: int, contractDetails: ContractDetails):
+        return
+
+    @auto_queue
+    def contractDetailsEnd(self, reqId: int):
+        return
+
+    @auto_queue
+    def securityDefinitionOptionParameter(self, reqId: int, exchange: str,
+                                          underlyingConId: int, tradingClass: str, multiplier: str,
+                                          expirations, strikes):
+        return
+
+    @auto_queue
+    def securityDefinitionOptionParameterEnd(self, reqId: int):
+        return
+
+    @auto_queue
+    def marketDataType(self, reqId: int, marketDataType: int):
+        return
+
+    @auto_queue
     def openOrder(self, orderId, contract, order, orderState):
         super().openOrder(orderId, contract, order, orderState)
 
@@ -217,6 +242,10 @@ class IBApi(EWrapper, EClient):
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=''):
         if reqId == -1:
             return
+        if reqId > 0 and self.ib_to_gui:
+            self.ib_to_gui.put({"type": "reqError", "args": (), "kwargs": {
+                "reqId": reqId, "errorCode": errorCode, "errorString": errorString,
+            }})
         if errorCode in [-1, 200, 201, 202]:  # Generic IB errors
             return
         print(f"ERROR {reqId} {errorCode} {errorString}")

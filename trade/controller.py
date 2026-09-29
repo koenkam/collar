@@ -9,6 +9,7 @@ from config import create_c
 c = create_c()
 from .book import as_count, describe, option_id, reconcile, stock_id
 from .firestore import FirestoreDB, log_sequence, sort_log
+from .screener import normalize_watchlist, watchlist_from_store
 from .sheetstofirestore import sheets_to_firestore, update_collar_account_value
 from util import Stub
 import threading
@@ -31,6 +32,12 @@ class Controller:
         self.processed = self.firestore.load_processed()
         self.review = self.firestore.load_review()
         self.book_initialized = self.firestore.is_initialized()
+        symbols, persist = watchlist_from_store(
+            self.firestore.load_screener_symbols(), c.screener_symbols
+        )
+        self.screener_symbols = symbols
+        if persist:
+            self.firestore.save_screener_symbols(symbols)
         print('Initialized FirestoreDB in Controller')
         self.broker = {}
         self.fills = {}
@@ -44,6 +51,9 @@ class Controller:
         self.reconcile_due = None
         self.book_paused = False
         self.status_message = ""
+        self.put_scan = None
+        self.display_batching = False
+        self.display_pending = False
         self.reqId = 1
         self.orderId = 1  # Separate counter for order IDs
         self.requests = OrderedDict()  # Maintain order of requests
@@ -217,13 +227,25 @@ class Controller:
         }
         self.sendIbCommand(command)
     
-    def process_incoming_data(self):
-        while not self.ib_to_gui.empty():
+    def process_incoming_data(self, limit=2000):
+        self.display_batching = True
+        try:
+            self._process_incoming_data(limit)
+        finally:
+            self.display_batching = False
+        if self.display_pending and self.displayer:
+            self.display_pending = False
+            self.displayer.updatePortfolioDisplay()
+
+    def _process_incoming_data(self, limit):
+        handled = 0
+        while not self.ib_to_gui.empty() and handled < limit:
+            handled += 1
 
             self.incoming_command = self.ib_to_gui.get()
 
             if self.incoming_command["type"] in ['command_result', 'error']:
-                return
+                continue
             if self.incoming_command["type"] in [
                 'position', 'positionEnd', 'openOrder', 'openOrderEnd',
                 'currentTime', 'accountSummary', 'accountSummaryEnd', 'managedAccounts',
@@ -247,6 +269,12 @@ class Controller:
                 command = self.requests[incoming_request_id]
                 command_type = self.incoming_command["type"]
 
+                if command.get("owner") == "screener":
+                    if self.put_scan is not None:
+                        self.put_scan.handle(command_type, self.incoming_command["kwargs"], incoming_request_id)
+                    continue
+                if command_type == "reqError":
+                    continue
                 if hasattr(self, f"handle_{command_type}"):
                     handler = getattr(self, f"handle_{command_type}")
                     handler()
@@ -259,7 +287,7 @@ class Controller:
                         "securityDefinitionOptionParameterEnd"
                     ]
                     if command_type in ignore_list:
-                        return
+                        continue
                     print(f"No handler for method: {command_type}")
 
     def sendIbCommand(self, command, extra={}):
@@ -273,7 +301,8 @@ class Controller:
         self.requests[self.reqId] = newcommand
         self.reqId += 1  
         self.do_stats(command)
-        
+        return newcommand["reqId"]
+
 
     def sendIbOrder(self, command, extra={}):
         newcommand = command.copy()     
@@ -651,7 +680,33 @@ class Controller:
         if self.reconcile_due is None or due < self.reconcile_due:
             self.reconcile_due = due
 
+    def start_put_scan(self, force=False):
+        if self.put_scan is not None and self.put_scan.running:
+            if not force:
+                return self.put_scan
+            self.put_scan.stop()
+        self.put_scan = PutScan(self, self.screener_symbols)
+        self.put_scan.start()
+        return self.put_scan
+
+    def put_scan_running(self):
+        return self.put_scan is not None and bool(self.put_scan.running)
+
+    def save_screener_watchlist(self, symbols):
+        cleaned = normalize_watchlist(symbols)
+        if not cleaned:
+            raise ValueError("Add at least one ticker")
+        self.screener_symbols = cleaned
+        self.firestore.save_screener_symbols(cleaned)
+        return cleaned
+
+    def stop_put_scan(self):
+        if self.put_scan is not None:
+            self.put_scan.stop()
+
     def tick(self):
+        if self.put_scan is not None:
+            self.put_scan.step()
         if self.book_paused or not (self.positions_ready and self.executions_ready):
             return
         if self.reconcile_due is None or time.time() < self.reconcile_due:

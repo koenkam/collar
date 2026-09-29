@@ -10,7 +10,7 @@ OPTION_FIELDS = [
     ("right", "Right (P or C)", "right", True),
     ("strike", "Strike", "number", True),
     ("expiry", "Expiry", "date", True),
-    ("premium", "Premium", "number", False),
+    ("premium", "Premium (net cash, negative when paid)", "number", False),
     ("startdate", "Start", "date", False),
     ("n", "Contracts (broker)", "readonly", False),
 ]
