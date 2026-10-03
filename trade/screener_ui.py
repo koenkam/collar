@@ -53,13 +53,20 @@ class WatchlistDialog(wx.Dialog):
     """Add, change, reorder, and remove tickers used by the put scan."""
 
     def __init__(self, parent, controller):
-        super().__init__(parent, title="Put watchlist", size=(460, 540),
+        super().__init__(parent, title="Put watchlist", size=(640, 540),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.controller = controller
         self.symbols = list(controller.screener_symbols)
         self._warned_scan = False
+        self._names_key = None
         self.init_ui()
         self.fill()
+        if hasattr(controller, "lookup_watchlist_names"):
+            controller.lookup_watchlist_names(self.symbols)
+        self.timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.on_timer, self.timer)
+        self.Bind(wx.EVT_CLOSE, self.on_close)
+        self.timer.Start(250)
 
     def init_ui(self):
         panel = wx.Panel(self)
@@ -68,7 +75,8 @@ class WatchlistDialog(wx.Dialog):
                 flag=wx.LEFT | wx.RIGHT | wx.TOP, border=10)
 
         self.list = wx.ListCtrl(panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
-        self.list.InsertColumn(0, "Symbol", width=360)
+        self.list.InsertColumn(0, "Symbol", width=90)
+        self.list.InsertColumn(1, "Company", width=480)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_edit)
         box.Add(self.list, proportion=1, flag=wx.EXPAND | wx.ALL, border=10)
 
@@ -86,7 +94,7 @@ class WatchlistDialog(wx.Dialog):
         restore = wx.Button(panel, label="Restore defaults")
         restore.Bind(wx.EVT_BUTTON, self.on_restore)
         close = wx.Button(panel, wx.ID_CLOSE, "Close")
-        close.Bind(wx.EVT_BUTTON, lambda event: self.EndModal(wx.ID_CLOSE))
+        close.Bind(wx.EVT_BUTTON, self.on_close)
         extras.Add(restore)
         extras.AddStretchSpacer()
         extras.Add(close)
@@ -99,13 +107,37 @@ class WatchlistDialog(wx.Dialog):
     def selected_index(self):
         return self.list.GetFirstSelected()
 
+    def names(self):
+        return getattr(self.controller, "screener_names", None) or {}
+
     def fill(self, select=None):
+        names = self.names()
         self.list.DeleteAllItems()
         for symbol in self.symbols:
-            self.list.InsertItem(self.list.GetItemCount(), symbol)
+            index = self.list.InsertItem(self.list.GetItemCount(), symbol)
+            self.list.SetItem(index, 1, names.get(symbol) or "")
+        self._names_key = tuple(names.get(symbol) or "" for symbol in self.symbols)
         if select is not None and 0 <= select < len(self.symbols):
             self.list.Select(select)
             self.list.EnsureVisible(select)
+
+    def on_timer(self, event):
+        names = self.names()
+        key = tuple(names.get(symbol) or "" for symbol in self.symbols)
+        if key == self._names_key:
+            return
+        for index, symbol in enumerate(self.symbols):
+            if index < self.list.GetItemCount():
+                self.list.SetItem(index, 1, names.get(symbol) or "")
+        self._names_key = key
+
+    def on_close(self, event):
+        if getattr(self, "timer", None):
+            self.timer.Stop()
+        if self.IsModal():
+            self.EndModal(wx.ID_CLOSE)
+        else:
+            self.Hide()
 
     def ask_symbol(self, title, value=""):
         dialog = wx.TextEntryDialog(self, "Ticker", title, value)
@@ -214,7 +246,10 @@ class SellPutsFrame(wx.Frame):
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_timer, self.timer)
         self.timer.Start(200)
-        self.maybe_autoscans()
+        try:
+            self.maybe_autoscans()
+        except Exception as e:
+            print(f"Put scan failed to start: {e}")
         self.refresh()
 
     def init_ui(self):
@@ -226,9 +261,9 @@ class SellPutsFrame(wx.Frame):
         self.btn_watchlist.Bind(wx.EVT_BUTTON, self.on_watchlist)
         self.btn_scan = wx.Button(panel, label="Scan")
         self.btn_scan.Bind(wx.EVT_BUTTON, self.on_scan)
-        bar.Add(self.progress, proportion=1, flag=wx.ALIGN_CENTER_VERTICAL)
-        bar.Add(self.btn_watchlist, flag=wx.LEFT, border=8)
-        bar.Add(self.btn_scan, flag=wx.LEFT, border=8)
+        bar.Add(self.progress, proportion=1, flag=wx.EXPAND)
+        bar.Add(self.btn_watchlist, flag=wx.LEFT | wx.ALIGN_CENTER_VERTICAL, border=8)
+        bar.Add(self.btn_scan, flag=wx.LEFT | wx.ALIGN_CENTER_VERTICAL, border=8)
         box.Add(bar, flag=wx.EXPAND | wx.ALL, border=10)
 
         self.list = wx.ListCtrl(panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
@@ -262,13 +297,20 @@ class SellPutsFrame(wx.Frame):
 
     def on_scan(self, event):
         scan = self.scan()
-        if scan is not None and scan.running:
-            self.controller.stop_put_scan()
-        else:
-            self.controller.start_put_scan(force=True)
+        try:
+            if scan is not None and scan.running:
+                self.controller.stop_put_scan()
+            else:
+                self._version = None
+                self.controller.start_put_scan(force=True)
+        except Exception as e:
+            wx.MessageBox(f"Scan did not start: {e}", "Sell puts", wx.OK | wx.ICON_ERROR)
         self.refresh()
 
     def on_timer(self, event):
+        scan = self.scan()
+        if scan is not None:
+            scan.step()
         self.refresh()
 
     def refresh(self):
@@ -322,6 +364,8 @@ class SellPutsFrame(wx.Frame):
 
     def on_close(self, event):
         self.Hide()
+        if event.CanVeto():
+            event.Veto()
 
 
 def accelerator():

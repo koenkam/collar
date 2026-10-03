@@ -37,9 +37,9 @@ def gui(c):
                 "DTE",
                 "PPD",
                 "PPD_NOW"]
-    c.portfolio_labels += ["Assign", "Close@", "Order", "Order_n", "Order_lim"]
+    c.portfolio_labels += ["Collat", "Assign", "Close@", "Order", "Order_n", "Order_lim"]
     c.portfolio_float_columns = ["Strike", "Underlying", "ITM%", "Premium", 
-                                 "Last", "Buyback", "PL", "PPD", "PPD_NOW", "Assign",
+                                 "Last", "Buyback", "PL", "PPD", "PPD_NOW", "Collat", "Assign",
                                   "Close@", "Order_lim"]
     c.portfolio_int_columns = ["N", "Days", "DIT", "DTE", "Order_n"]
     c.portfolio_columns_left = ["Symbol", "Type"]
@@ -70,6 +70,7 @@ def wheel(c):
     ]
     c.default_exchange = 'CBOE'
     c.cash_settled_symbols = {'SPX', 'XSP', 'NDX', 'RUT', 'VIX'}
+    c.max_collateral_fraction = 0.7
     c.book_settle_seconds = 60
     c.roll_window_seconds = 15 * 60
     return c

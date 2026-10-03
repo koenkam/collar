@@ -143,3 +143,17 @@ broadcom
 - do an initial scan when the window is first opened by the user
 - when the window is then closed and reopened, do not do a rescan. only rescan when the user actively rescans.
 - print at the top of the window when the scan was last completed.
+
+20. in the stock symbol list (popup to edit the list), add a field that displays the company name
+
+21. scan doesn't seem to work
+
+22. can you change the logo of the wxPython app in the apple doc? Find me a nice logo that is more fitting to the Collar app.
+
+23. tidy up the dashboard.
+
+- definition of assign: this is the profit / loss if a short put is assigned or a stock with a short call is called away.
+- definition of collateral: this is the amount of cash that is converted in stocks if a put is assigned. so change 'assign' with 'Collateral' in the dashboard in the location where that is relevant
+- disply 70% as the current value for the max total collateral as a percentage of the total portfolio value
+
+24. in the 'sell puts' popup, order the grid based on the yield% in descending order. when scanning entries, put them aotomatically 1 by 1 on the correct row.

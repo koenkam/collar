@@ -1,11 +1,33 @@
-import wx
-import threading
-import sys
-import time
-from trade.api import IBApi
-from trade.main import MainFrame
-from trade.controller import Controller
+import os
 import queue
+import sys
+import threading
+import time
+
+import wx
+
+from trade.api import IBApi
+from trade.controller import Controller
+from trade.main import MainFrame
+
+ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "collar.png")
+
+
+def apply_app_icon(frame):
+    if not os.path.isfile(ICON_PATH):
+        return
+    icon = wx.Icon(ICON_PATH, wx.BITMAP_TYPE_PNG)
+    if icon.IsOk():
+        frame.SetIcon(icon)
+    if sys.platform != "darwin":
+        return
+    try:
+        from AppKit import NSApplication, NSImage
+        image = NSImage.alloc().initWithContentsOfFile_(ICON_PATH)
+        if image is not None:
+            NSApplication.sharedApplication().setApplicationIconImage_(image)
+    except Exception as e:
+        print(f"Dock icon not set: {e}")
 
 
 def main():
@@ -30,6 +52,7 @@ def main():
     app = wx.App(False)
     
     frame = MainFrame(controller)
+    apply_app_icon(frame)
     
     frame.Center()
     

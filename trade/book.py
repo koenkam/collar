@@ -127,6 +127,7 @@ class SymbolBook:
                 "multiplier": multiplier(source),
                 "n": 0,
                 "premium": 0.0,
+                "open_commission": 0.0,
                 "startdate": startdate,
             })
             if source.get("conId"):
@@ -157,6 +158,40 @@ class SymbolBook:
         if n == 0:
             return 0.0
         return premium * contracts / n
+
+    def commission_slice(self, doc, contracts):
+        """Opening commission of `contracts`, or None when this position never tracked it."""
+        if doc.get("open_commission") is None:
+            return None
+        n = abs(as_count(doc.get("n")))
+        if n == 0:
+            return 0.0
+        return float(doc["open_commission"]) * contracts / n
+
+    def attach_open(self, row, doc, contracts, premium_slice):
+        """Put the sell price and opening commission on a close or expiration row.
+
+        Price is the per-share credit that, with this commission, reproduces the
+        premium: premium = signed_quantity * price * multiplier - commission.
+        """
+        commission = self.commission_slice(doc, contracts)
+        if commission is None:
+            return
+        short = as_count(doc.get("n")) < 0
+        signed = as_count(contracts if short else -contracts)
+        denom = signed * multiplier(doc)
+        if abs(denom) < EPS:
+            return
+        row["open_price"] = round((premium_slice + commission) / denom, 6)
+        row["open_commission"] = round(commission, 6)
+        doc["open_commission"] = round(float(doc["open_commission"]) - commission, 6)
+
+    def take_commission(self, doc, contracts):
+        commission = self.commission_slice(doc, contracts)
+        if commission is None:
+            return 0.0
+        doc["open_commission"] = round(float(doc["open_commission"]) - commission, 6)
+        return commission
 
     def option_log(self, doc, contracts, slice_, cash_close, close_price, close_commission, close_date, kind):
         mult = multiplier(doc)
@@ -251,6 +286,10 @@ class SymbolBook:
         doc, created = self.ensure_option(iid, leg["fill"], leg["date"])
         doc["premium"] = float(doc.get("premium") or 0.0) + leg["cash"]
         doc["n"] = leg["n1"]
+        if created or doc.get("open_commission") is not None:
+            doc["open_commission"] = round(
+                float(doc.get("open_commission") or 0.0) + leg["commission"], 6
+            )
         added = abs(leg["n1"] - leg["n0"])
         if created:
             self.outcome.messages.append(
@@ -268,6 +307,7 @@ class SymbolBook:
         close_price = leg["gross"] / leg["qty"] if leg["qty"] else 0.0
         row = self.option_log(doc, contracts, slice_, leg["cash"], close_price,
                               leg["commission"], leg["date"], "close")
+        self.attach_open(row, doc, contracts, slice_)
         self.outcome.logs.append(row)
         doc["premium"] = float(doc.get("premium") or 0.0) - slice_
         doc["n"] = leg["n1"]
@@ -277,14 +317,21 @@ class SymbolBook:
 
     def apply_roll(self, legs, closings, target_id):
         transferred = sum(leg["cash"] for leg in legs.values())
+        carried_commission = 0.0
         startdates = []
         described = []
+        target = self.options.get(target_id)
+        tracked = target is None or target.get("open_commission") is not None
+        for iid in closings:
+            if self.options[iid].get("open_commission") is None:
+                tracked = False
         for iid in closings:
             leg = legs[iid]
             doc = self.options[iid]
             contracts = abs(leg["n0"]) - abs(leg["n1"])
             slice_ = self.premium_slice(doc, contracts)
             transferred += slice_
+            carried_commission += self.take_commission(doc, contracts) + leg["commission"]
             doc["premium"] = float(doc.get("premium") or 0.0) - slice_
             doc["n"] = leg["n1"]
             if doc.get("startdate"):
@@ -296,6 +343,11 @@ class SymbolBook:
             startdates.append(doc["startdate"])
         doc["premium"] = float(doc.get("premium") or 0.0) + transferred
         doc["n"] = leg["n1"]
+        if tracked:
+            previous = 0.0 if created else float(doc.get("open_commission") or 0.0)
+            doc["open_commission"] = round(previous + carried_commission + leg["commission"], 6)
+        elif created:
+            doc.pop("open_commission", None)
         if startdates:
             doc["startdate"] = min(startdates)
         self.outcome.messages.append(
@@ -414,6 +466,7 @@ class SymbolBook:
         mult = multiplier(doc)
         shares = contracts * mult
         slice_ = self.premium_slice(doc, contracts)
+        self.take_commission(doc, contracts)
         date = self.assignment_date(doc)
         stock = self.ensure_stock(date)
         n0 = float(stock["n"])
@@ -442,6 +495,7 @@ class SymbolBook:
         credit = float(stock.get("credit") or 0.0)
         credit_slice = credit * shares / n0
         call_slice = self.premium_slice(doc, contracts)
+        self.take_commission(doc, contracts)
         profit = (strike - avg) * shares + credit_slice + call_slice
         date = self.assignment_date(doc)
         self.outcome.logs.append({
@@ -490,6 +544,7 @@ class SymbolBook:
         signed_quantity = contracts if short else -contracts
         cash_close = -close_price * signed_quantity * mult
         row = self.option_log(doc, contracts, slice_, cash_close, close_price, 0.0, expiry, "expiration")
+        self.attach_open(row, doc, contracts, slice_)
         self.outcome.logs.append(row)
         doc["premium"] = float(doc.get("premium") or 0.0) - slice_
         doc["n"] = as_count(as_count(doc["n"]) + (contracts if short else -contracts))
@@ -586,6 +641,8 @@ class SymbolBook:
             doc["n"] = self.broker_n(iid)
             if doc.get("premium") is not None:
                 doc["premium"] = money(doc["premium"])
+            if doc.get("open_commission") is not None:
+                doc["open_commission"] = round(float(doc["open_commission"]), 6)
             if original != doc:
                 out.options[iid] = doc
         if self.stock is not None:

@@ -49,14 +49,25 @@ class FirestoreDB:
             "value_start": data.get("value_start"),
         }
 
-    def load_screener_symbols(self):
+    def load_screener(self):
         doc = self.db.collection("summary").document("screener").get()
         if not doc.exists:
-            return None
-        return (doc.to_dict() or {}).get("symbols")
+            return None, {}
+        data = doc.to_dict() or {}
+        names = {}
+        for key, value in (data.get("names") or {}).items():
+            symbol = str(key or "").strip().upper()
+            name = str(value or "").strip()
+            if symbol and name:
+                names[symbol] = name
+        return data.get("symbols"), names
 
-    def save_screener_symbols(self, symbols):
-        self.db.collection("summary").document("screener").set({"symbols": list(symbols)})
+    def save_screener(self, symbols, names):
+        kept = {s: n for s, n in (names or {}).items() if s in symbols and n}
+        self.db.collection("summary").document("screener").set({
+            "symbols": list(symbols),
+            "names": kept,
+        })
 
     def get_log(self):
         trades = []

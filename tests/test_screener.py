@@ -3,10 +3,10 @@ import datetime
 
 from config import create_c
 from trade.screener import (
-    candidate_strikes, earnings_flag, evaluate_symbol, format_candidate_row,
-    format_screener_row, held_text, normalize_symbol, normalize_watchlist,
-    put_delta, rank, sessions_after, target_expiry, watchlist_from_store,
-    yield_at_delta,
+    candidate_strikes, company_display_name, earnings_flag, evaluate_symbol,
+    format_candidate_row, format_screener_row, held_text, normalize_symbol,
+    normalize_watchlist, put_delta, rank, sessions_after, target_expiry,
+    watchlist_from_store, watchlist_names, yield_at_delta,
 )
 
 c = create_c()
@@ -74,6 +74,15 @@ def test_filters():
     assert yield_at_delta(rows) is None
 
 
+def test_missing_quote_status():
+    empty = evaluate_symbol({"symbol": "KO", "spot": 87, "quotes": []}, CFG)
+    assert empty["status"] == "no quotes"
+    no_delta = evaluate_symbol({"symbol": "KO", "spot": 87, "quotes": [
+        {"strike": 80, "bid": 1.0, "ask": 1.1, "delta": None, "oi": 500},
+    ]}, CFG)
+    assert no_delta["status"] == "no delta"
+
+
 def test_earnings_flag():
     expiry = d("20261009")
     calendar = {d("20261006"): {"AMD": "time-after-hours"}, d("20261009"): {"KO": "time-after-hours",
@@ -134,6 +143,11 @@ def test_watchlist_normalize_and_store():
     assert watchlist_from_store(["shop", "NVDA"], defaults) == (["SHOP", "NVDA"], False)
     assert watchlist_from_store(["???"], defaults) == (["AMZN", "GOOGL"], True)
     assert watchlist_from_store([], defaults) == (["AMZN", "GOOGL"], True)
+    assert company_display_name("ADVANCED MICRO DEVICES INC") == "Advanced Micro Devices Inc"
+    assert company_display_name("Berkshire Hathaway") == "Berkshire Hathaway"
+    assert watchlist_names(["AMD", "KO"], {"AMD": "Advanced Micro Devices Inc", "SHOP": "Shopify"}) == {
+        "AMD": "Advanced Micro Devices Inc",
+    }
 
 
 def main():

@@ -362,13 +362,18 @@ class MainFrame(wx.Frame):
         self.update_status()
 
     def open_screener(self, event=None):
-        if self.screener_frame:
-            self.screener_frame.Show()
-            self.screener_frame.Raise()
-            self.screener_frame.refresh()
-            return
+        frame = self.screener_frame
+        if frame is not None:
+            try:
+                frame.Show()
+                frame.Raise()
+                frame.refresh()
+                return
+            except RuntimeError:
+                self.screener_frame = None
         self.screener_frame = SellPutsFrame(self, self.controller)
         self.screener_frame.Show()
+        self.screener_frame.Raise()
 
     def open_watchlist(self, event=None):
         dialog = WatchlistDialog(self, self.controller)
@@ -392,7 +397,10 @@ class MainFrame(wx.Frame):
             getattr(self.controller, "summary", None),
             getattr(self.controller, "log_trades", None),
             getattr(self.controller, "account_value", None),
-            short_put_notional(getattr(self.controller, "option_portfolio", None)),
+            short_put_notional(
+                getattr(self.controller, "option_portfolio", None), c.cash_settled_symbols,
+            ),
+            max_fraction=c.max_collateral_fraction,
         )
         line1, line2 = format_totals(totals)
         text = (line1, line2)

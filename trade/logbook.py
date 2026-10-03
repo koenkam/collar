@@ -173,24 +173,41 @@ def parse_log_sheet(values, formulas):
     return summary, trades, errors
 
 
-def short_put_notional(option_portfolio):
-    """Assignment cash of open short puts. Long hedges are excluded."""
+def short_put_collateral(contract, quantity, multiplier=100.0, cash_settled=()):
+    """Cash converted to shares if this short put is assigned.
+
+    Undefined for calls, long options, and cash-settled underlyings.
+    """
+    if getattr(contract, "secType", "") != "OPT" or getattr(contract, "right", "") != "P":
+        return None
+    if getattr(contract, "symbol", "") in set(cash_settled or ()):
+        return None
+    if not quantity or quantity >= 0:
+        return None
+    return float(contract.strike) * abs(quantity) * float(multiplier)
+
+
+def short_put_notional(option_portfolio, cash_settled=()):
+    """Collateral of open short puts. Long hedges and cash-settled contracts are excluded."""
     total = 0.0
     for position in (option_portfolio or {}).values():
         contract = getattr(position, "contract", None)
-        if contract is None or getattr(contract, "secType", "") != "OPT":
+        if contract is None:
             continue
-        if getattr(contract, "right", "") != "P":
-            continue
-        quantity = getattr(position, "n", 0) or 0
-        if quantity >= 0:
-            continue
-        strike = getattr(contract, "strike", 0) or 0
-        total += strike * abs(quantity) * 100
+        try:
+            multiplier = float(getattr(contract, "multiplier", 0) or 0)
+        except (TypeError, ValueError):
+            multiplier = 0.0
+        if multiplier <= 0:
+            multiplier = 100.0
+        value = short_put_collateral(contract, getattr(position, "n", 0), multiplier, cash_settled)
+        if value:
+            total += value
     return total
 
 
-def compute_collar_totals(summary, trades, account_value, assign_notional, today=None):
+def compute_collar_totals(summary, trades, account_value, collateral=None, today=None,
+                          max_fraction=0.7):
     today = today or datetime.date.today()
     summary = summary or {}
     start_date = summary.get("start_date") or ""
@@ -205,14 +222,12 @@ def compute_collar_totals(summary, trades, account_value, assign_notional, today
     if start_date:
         days = (today - yyyymmdd_to_date(start_date)).days
     percentage = None
-    max_assign = None
     per_year = None
     account = None
     if account_value is not None:
         account = float(account_value)
-        if account != 0 and assign_notional is not None:
-            percentage = float(assign_notional) / account
-        max_assign = account * 0.7
+        if account != 0 and collateral is not None:
+            percentage = float(collateral) / account
         base = account - total_usd
         if days and days > 0 and base > 0:
             per_year = (account / base) ** (365 / days)
@@ -221,9 +236,9 @@ def compute_collar_totals(summary, trades, account_value, assign_notional, today
         "value_start": value_start,
         "days": days,
         "per_year": per_year,
-        "assign": None if assign_notional is None else float(assign_notional),
+        "collateral": None if collateral is None else float(collateral),
         "percentage": percentage,
-        "max": max_assign,
+        "max_fraction": float(max_fraction),
         "total_usd": total_usd,
         "account_value": account,
     }
@@ -248,11 +263,18 @@ def format_price(value):
     return text or "0"
 
 
+def format_percent(value, digits=0):
+    if value is None:
+        return "—"
+    return f"{float(value) * 100:.{digits}f}%"
+
+
 def format_totals(totals):
     start = format_yyyymmdd(totals.get("start_date"))
     days = "—" if totals.get("days") is None else str(totals["days"])
     per_year = "—" if totals.get("per_year") is None else f"{totals['per_year']:.2f}"
-    percentage = "—" if totals.get("percentage") is None else f"{totals['percentage']:.2f}"
+    percentage = format_percent(totals.get("percentage"), 1)
+    maximum = format_percent(totals.get("max_fraction"), 0)
     line1 = (
         f"start {start}    "
         f"value start {format_money(totals.get('value_start'))}    "
@@ -260,9 +282,9 @@ def format_totals(totals):
         f"per year {per_year}"
     )
     line2 = (
-        f"assign {format_money(totals.get('assign'))}    "
+        f"collateral {format_money(totals.get('collateral'))}    "
         f"percentage {percentage}    "
-        f"max {format_money(totals.get('max'))}    "
+        f"max {maximum}    "
         f"total {format_money(totals.get('total_usd'))}"
     )
     return line1, line2

@@ -1,8 +1,9 @@
 import datetime
 from config import create_c
 from .book import breakeven
-from .logbook import format_yyyymmdd
+from .logbook import format_yyyymmdd, short_put_collateral
 c=create_c()
+
 
 class Displayer:
 
@@ -154,6 +155,9 @@ class Displayer:
                     assignvalue += (strike - underlying) * position.n * 100
             else:
                 assignvalue = ""
+            collateral = short_put_collateral(
+                contract, position.n, self.controller.contract_multiplier(contract), c.cash_settled_symbols,
+            )
 
             position.closeat = (premium- dit * ppd)/ 100 / abs(position.n) if position.n != 0 else 0.0
             #print(position.closeat, premium, dit, ppd, position.n)
@@ -186,6 +190,7 @@ class Displayer:
                 dte,
                 ppd,
                 ppd_now,
+                collateral,
                 assignvalue,
                 position.closeat,
                 order,

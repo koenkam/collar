@@ -1,5 +1,6 @@
 """Earnings dates from Nasdaq's public calendar."""
 import json
+import time
 import urllib.request
 
 URL = "https://api.nasdaq.com/api/calendar/earnings?date={date}"
@@ -10,13 +11,21 @@ HEADERS = {
 }
 
 
-def fetch_day(day, timeout=10):
+def fetch_day(day, timeout=10, attempts=3):
     """Symbols reporting on this day, mapped to Nasdaq's time label."""
-    request = urllib.request.Request(URL.format(date=day.strftime("%Y-%m-%d")), headers=HEADERS)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    rows = ((payload or {}).get("data") or {}).get("rows") or []
-    return {str(r.get("symbol", "")).upper(): r.get("time") or "" for r in rows if r.get("symbol")}
+    last = None
+    for i in range(attempts):
+        try:
+            request = urllib.request.Request(URL.format(date=day.strftime("%Y-%m-%d")), headers=HEADERS)
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            rows = ((payload or {}).get("data") or {}).get("rows") or []
+            return {str(r.get("symbol", "")).upper(): r.get("time") or "" for r in rows if r.get("symbol")}
+        except Exception as e:
+            last = e
+            if i + 1 < attempts:
+                time.sleep(0.4 * (i + 1))
+    raise last
 
 
 def fetch_calendar(days):

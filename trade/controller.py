@@ -9,7 +9,8 @@ from config import create_c
 c = create_c()
 from .book import as_count, describe, option_id, reconcile, stock_id
 from .firestore import FirestoreDB, log_sequence, sort_log
-from .screener import normalize_watchlist, watchlist_from_store
+from .put_scan import PutScan
+from .screener import company_display_name, normalize_watchlist, watchlist_from_store, watchlist_names
 from .sheetstofirestore import sheets_to_firestore, update_collar_account_value
 from util import Stub
 import threading
@@ -32,12 +33,13 @@ class Controller:
         self.processed = self.firestore.load_processed()
         self.review = self.firestore.load_review()
         self.book_initialized = self.firestore.is_initialized()
-        symbols, persist = watchlist_from_store(
-            self.firestore.load_screener_symbols(), c.screener_symbols
-        )
+        stored, names = self.firestore.load_screener()
+        symbols, persist = watchlist_from_store(stored, c.screener_symbols)
         self.screener_symbols = symbols
+        self.screener_names = watchlist_names(symbols, names)
+        self.screener_names_dirty = False
         if persist:
-            self.firestore.save_screener_symbols(symbols)
+            self.firestore.save_screener(symbols, self.screener_names)
         print('Initialized FirestoreDB in Controller')
         self.broker = {}
         self.fills = {}
@@ -231,6 +233,8 @@ class Controller:
         self.display_batching = True
         try:
             self._process_incoming_data(limit)
+        except Exception as e:
+            print(f"Incoming data error: {e}")
         finally:
             self.display_batching = False
         if self.display_pending and self.displayer:
@@ -272,6 +276,9 @@ class Controller:
                 if command.get("owner") == "screener":
                     if self.put_scan is not None:
                         self.put_scan.handle(command_type, self.incoming_command["kwargs"], incoming_request_id)
+                    continue
+                if command.get("owner") == "watchlist":
+                    self.handle_watchlist_details(command_type, self.incoming_command["kwargs"], command)
                     continue
                 if command_type == "reqError":
                     continue
@@ -697,8 +704,50 @@ class Controller:
         if not cleaned:
             raise ValueError("Add at least one ticker")
         self.screener_symbols = cleaned
-        self.firestore.save_screener_symbols(cleaned)
+        self.screener_names = watchlist_names(cleaned, self.screener_names)
+        self.persist_screener()
+        self.lookup_watchlist_names(cleaned)
         return cleaned
+
+    def set_screener_name(self, symbol, name):
+        name = company_display_name(name)
+        if not symbol or not name or symbol not in self.screener_symbols:
+            return
+        if self.screener_names.get(symbol) == name:
+            return
+        self.screener_names[symbol] = name
+        self.screener_names_dirty = True
+
+    def persist_screener(self):
+        try:
+            self.firestore.save_screener(self.screener_symbols, self.screener_names)
+            self.screener_names_dirty = False
+        except Exception as e:
+            print(f"Watchlist not saved: {e}")
+
+    def lookup_watchlist_names(self, symbols=None):
+        pending = {
+            req.get("symbol")
+            for req in self.requests.values()
+            if req.get("owner") == "watchlist" and req.get("symbol")
+        }
+        for symbol in symbols or self.screener_symbols:
+            if self.screener_names.get(symbol) or symbol in pending:
+                continue
+            stock = Contract()
+            stock.symbol, stock.secType, stock.exchange, stock.currency = symbol, "STK", "SMART", "USD"
+            self.sendIbCommand(
+                {"method_name": "reqContractDetails", "contract": stock},
+                extra={"owner": "watchlist", "symbol": symbol},
+            )
+            pending.add(symbol)
+
+    def handle_watchlist_details(self, command_type, kwargs, command):
+        if command_type != "contractDetails":
+            return
+        details = kwargs.get("contractDetails")
+        name = getattr(details, "longName", None) if details is not None else ""
+        self.set_screener_name(command.get("symbol"), name)
 
     def stop_put_scan(self):
         if self.put_scan is not None:
@@ -707,6 +756,8 @@ class Controller:
     def tick(self):
         if self.put_scan is not None:
             self.put_scan.step()
+        if self.screener_names_dirty:
+            self.persist_screener()
         if self.book_paused or not (self.positions_ready and self.executions_ready):
             return
         if self.reconcile_due is None or time.time() < self.reconcile_due:

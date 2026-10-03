@@ -7,12 +7,15 @@ TODAY = datetime.date(2026, 9, 28)
 CFG = {"cash_settled": {"SPX"}, "roll_window_seconds": 900, "underlying": {}}
 
 
-def opt(symbol, strike, right, expiry, n, premium, startdate="20260901"):
-    return {
+def opt(symbol, strike, right, expiry, n, premium, startdate="20260901", open_commission=None):
+    doc = {
         "secType": "OPT", "symbol": symbol, "right": right, "strike": float(strike),
         "expiry": expiry, "multiplier": 100.0, "n": n, "premium": premium,
         "startdate": startdate,
     }
+    if open_commission is not None:
+        doc["open_commission"] = open_commission
+    return doc
 
 
 def held(symbol, n, strike=None, right=None, expiry=None):
@@ -54,6 +57,7 @@ def test_open():
     doc = out.options[iid]
     assert doc["n"] == -4 and doc["startdate"] == "20260928"
     assert round(doc["premium"], 2) == 4638.15
+    assert doc["open_commission"] == 1.85
     assert out.processed == ["e1"] and not out.logs
 
 
@@ -93,6 +97,47 @@ def test_full_close_removes_document():
     assert out.logs[0]["profit"] == round(748.67 - 246 - 1.3, 2)
 
 
+def test_close_log_keeps_sell_price_and_opening_commission():
+    iid, _ = held("AMD", 0, 600, "P", "20261009")
+    book = {iid: opt("AMD", 600, "P", "20261009", -4, 4638.15, "20260925", open_commission=1.85)}
+    out = only(reconcile(book, {}, {}, [
+        fill("e1", "AMD", "BOT", 4, 4.7, 1.6692, 600, "P", "20261009", date="20261002"),
+    ], datetime.date(2026, 10, 2), CFG))
+    row = out.logs[0]
+    assert row["open_price"] == 11.6
+    assert row["open_commission"] == 1.85
+    assert row["close_price"] == 4.7
+    assert row["close_commission"] == 1.6692
+    assert row["premium"] == 4638.15
+    assert row["profit"] == round(4638.15 - 4 * 4.7 * 100 - 1.6692, 2)
+
+
+def test_partial_close_slices_opening_commission():
+    iid, entry = held("NVDA", -1, 220, "P", "20260930")
+    book = {iid: opt("NVDA", 220, "P", "20260930", -2, 346.74, "20260923", open_commission=1.26)}
+    out = only(reconcile(book, {}, {iid: entry}, [
+        fill("e1", "NVDA", "BOT", 1, 1.0, 0.62, 220, "P", "20260930"),
+    ], TODAY, CFG))
+    row = out.logs[0]
+    assert row["open_price"] == 1.74
+    assert row["open_commission"] == 0.63
+    assert out.options[iid]["open_commission"] == 0.63
+
+
+def test_roll_carries_opening_commission():
+    old, _ = held("AMD", 0, 600, "P", "20261009")
+    new, entry = held("AMD", -3, 580, "P", "20261016")
+    book = {old: opt("AMD", 600, "P", "20261009", -4, 4638.15, "20260925", open_commission=1.85)}
+    out = only(reconcile(book, {}, {new: entry}, [
+        fill("e1", "AMD", "BOT", 4, 9.0, 2.0, 600, "P", "20261009", ts=100),
+        fill("e2", "AMD", "SLD", 3, 14.0, 1.5, 580, "P", "20261016", ts=160),
+    ], TODAY, CFG))
+    doc = out.options[new]
+    assert doc["open_commission"] == round(1.85 + 2.0 + 1.5, 6)
+    price = (doc["premium"] + doc["open_commission"]) / (3 * 100)
+    assert round(price, 6) == round(5240 / 300, 6)
+
+
 def test_roll_keeps_start_and_carries_premium_with_count_change():
     old, _ = held("AMD", 0, 592.5, "P", "20260930")
     new, entry = held("AMD", -3, 580, "P", "20261016")
@@ -120,6 +165,8 @@ def test_put_close_and_call_open_are_not_a_roll():
     assert out.options[put] is None
     assert out.options[call]["startdate"] == "20260928"
     assert round(out.options[call]["premium"], 2) == 399.0
+    assert out.options[call]["open_commission"] == 1.0
+    assert "open_price" not in out.logs[0]
 
 
 def test_expiration_worthless():

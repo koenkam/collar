@@ -31,6 +31,21 @@ def normalize_watchlist(symbols):
     return result
 
 
+def company_display_name(text):
+    name = str(text or "").strip()
+    if not name:
+        return ""
+    if name.isupper() and any(c.isalpha() for c in name):
+        return name.title()
+    return name
+
+
+def watchlist_names(symbols, names):
+    """Keep stored company names for symbols that are still on the list."""
+    names = names or {}
+    return {symbol: names[symbol] for symbol in symbols if names.get(symbol)}
+
+
 def watchlist_from_store(stored, defaults):
     """Return (symbols, persist). persist is True when Firestore should be seeded."""
     defaults = list(defaults)
@@ -220,14 +235,23 @@ def evaluate_symbol(scan, cfg):
         row["ivhv"] = row["iv"] / row["hv"]
     if row["status"]:
         return row
-    rows = [evaluate_quote(q, cfg) for q in scan.get("quotes", [])]
+    quotes = scan.get("quotes") or []
+    if not quotes:
+        row["status"] = "no quotes"
+        return row
+    rows = [evaluate_quote(q, cfg) for q in quotes]
     rows.sort(key=lambda r: -r["strike"])
     row["candidates"] = rows
     target = cfg.get("target_delta", 0.25)
     row["y25"] = yield_at_delta(rows, target)
     row["pick"] = recommend(rows, target, cfg.get("band", (0.20, 0.30)))
     if row["pick"] is None:
-        row["status"] = "none in band"
+        if all(q.get("delta") is None for q in quotes):
+            row["status"] = "no delta"
+        elif all(q.get("bid") is None or q.get("ask") is None for q in quotes):
+            row["status"] = "no quotes"
+        else:
+            row["status"] = "none in band"
     elif row["y25"] is None:
         row["status"] = "no 25Δ"
     return row
