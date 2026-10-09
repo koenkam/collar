@@ -1,6 +1,8 @@
 """Realized-trade math shared by the Log import and the main window."""
 import datetime
 
+from util import expand_yymmdd
+
 SHEETS_EPOCH = datetime.date(1899, 12, 30)
 
 
@@ -40,6 +42,16 @@ def format_yyyymmdd(value):
         return "—"
     text = str(value)
     return f"{text[0:4]}-{text[4:6]}-{text[6:8]}"
+
+
+def format_yymmdd(value, missing="—"):
+    """Six-digit date for grid cells. Other screens keep the full date."""
+    text = str(value or "")
+    if len(text) == 6 and text.isdigit():
+        return text
+    if len(text) != 8 or not text.isdigit():
+        return missing
+    return text[2:8]
 
 
 def as_float(value):
@@ -208,29 +220,44 @@ def short_put_notional(option_portfolio, cash_settled=()):
 
 def compute_collar_totals(summary, trades, account_value, collateral=None, today=None,
                           max_fraction=0.7):
+    """Totals for the dashboard strip.
+
+    `trading_usd` is realized profit from the log. `total_profit` is the account
+    value minus the value at start. Per year annualizes that total profit.
+    `limit` is the collateral cap, `max_fraction` of the account. `room` is
+    that cap minus current collateral.
+    """
     today = today or datetime.date.today()
     summary = summary or {}
     start_date = summary.get("start_date") or ""
     value_start = summary.get("value_start")
-    total_usd = 0.0
+    trading_usd = 0.0
     for trade in trades or []:
         profit = trade.get("profit")
         if profit is not None:
-            total_usd += float(profit)
-    total_usd = money(total_usd)
+            trading_usd += float(profit)
+    trading_usd = money(trading_usd)
     days = None
     if start_date:
         days = (today - yyyymmdd_to_date(start_date)).days
     percentage = None
     per_year = None
+    total_profit = None
+    limit = None
+    room = None
     account = None
     if account_value is not None:
         account = float(account_value)
-        if account != 0 and collateral is not None:
-            percentage = float(collateral) / account
-        base = account - total_usd
-        if days and days > 0 and base > 0:
-            per_year = (account / base) ** (365 / days)
+        limit = money(account * float(max_fraction))
+        if collateral is not None:
+            room = money(limit - float(collateral))
+            if account != 0:
+                percentage = float(collateral) / account
+    if account is not None and value_start is not None:
+        start_value = float(value_start)
+        total_profit = money(account - start_value)
+        if days and days > 0 and start_value > 0 and account > 0:
+            per_year = (account / start_value) ** (365 / days)
     return {
         "start_date": start_date,
         "value_start": value_start,
@@ -239,7 +266,10 @@ def compute_collar_totals(summary, trades, account_value, collateral=None, today
         "collateral": None if collateral is None else float(collateral),
         "percentage": percentage,
         "max_fraction": float(max_fraction),
-        "total_usd": total_usd,
+        "limit": limit,
+        "room": room,
+        "trading_usd": trading_usd,
+        "total_profit": total_profit,
         "account_value": account,
     }
 
@@ -269,41 +299,87 @@ def format_percent(value, digits=0):
     return f"{float(value) * 100:.{digits}f}%"
 
 
-def format_totals(totals):
-    start = format_yyyymmdd(totals.get("start_date"))
-    days = "—" if totals.get("days") is None else str(totals["days"])
-    per_year = "—" if totals.get("per_year") is None else f"{totals['per_year']:.2f}"
-    percentage = format_percent(totals.get("percentage"), 1)
-    maximum = format_percent(totals.get("max_fraction"), 0)
-    line1 = (
-        f"start {start}    "
-        f"value start {format_money(totals.get('value_start'))}    "
-        f"days {days}    "
-        f"per year {per_year}"
-    )
-    line2 = (
-        f"collateral {format_money(totals.get('collateral'))}    "
-        f"percentage {percentage}    "
-        f"max {maximum}    "
-        f"total {format_money(totals.get('total_usd'))}"
-    )
-    return line1, line2
+def format_dashboard(totals):
+    """Display strings for the totals strip, keyed for the grouped layout."""
+    days = totals.get("days")
+    per_year = totals.get("per_year")
+    return {
+        "start": format_yyyymmdd(totals.get("start_date")),
+        "value_start": format_money(totals.get("value_start")),
+        "days": "—" if days is None else str(days),
+        "per_year": "—" if per_year is None else f"{per_year:.2f}",
+        "trading": format_money(totals.get("trading_usd")),
+        "total": format_money(totals.get("total_profit")),
+        "collateral": format_money(totals.get("collateral")),
+        "percentage": format_percent(totals.get("percentage"), 1),
+        "max": format_percent(totals.get("max_fraction"), 0),
+        "limit": format_money(totals.get("limit")),
+        "left": format_money(totals.get("room")),
+    }
+
+
+def profit_buckets(trades, group="month"):
+    """Sum realized profit by close date. `group` is day, month, or year.
+
+    Each row is the period profit and the running total, in date order.
+    A trade with no close date or no profit is left out.
+    """
+    if group not in ("day", "month", "year"):
+        group = "month"
+    totals = {}
+    for trade in trades or []:
+        key = _bucket_key(trade.get("close_date"), group)
+        profit = as_float(trade.get("profit"))
+        if key is None or profit is None:
+            continue
+        totals[key] = totals.get(key, 0.0) + profit
+    rows = []
+    running = 0.0
+    for key in sorted(totals):
+        profit = money(totals[key])
+        running = money(running + profit)
+        rows.append({
+            "key": key,
+            "label": _bucket_label(key, group),
+            "profit": profit,
+            "cumulative": running,
+        })
+    return rows
+
+
+def _bucket_key(value, group):
+    text = expand_yymmdd(value)
+    if not text:
+        return None
+    if group == "year":
+        return text[:4]
+    if group == "month":
+        return text[:6]
+    return text
+
+
+def _bucket_label(key, group):
+    if group == "year":
+        return key
+    if group == "month":
+        return f"{key[:4]}-{key[4:6]}"
+    return f"{key[2:4]}-{key[4:6]}-{key[6:8]}"
 
 
 def format_log_row(trade):
     assign = trade.get("assign")
     return [
-        format_yyyymmdd(trade.get("open_date")),
+        format_yymmdd(trade.get("open_date")),
         right_label(trade.get("right")),
         trade.get("symbol") or "",
         str(trade.get("signed_quantity", "")),
         format_price(trade.get("strike")),
         format_price(trade.get("open_price")),
-        format_yyyymmdd(trade.get("expiry")),
+        format_yymmdd(trade.get("expiry")),
         format_number(trade.get("open_commission")),
         format_number(trade.get("premium")),
         "" if assign is None else format_number(assign),
-        format_yyyymmdd(trade.get("close_date")),
+        format_yymmdd(trade.get("close_date")),
         format_price(trade.get("close_price")),
         format_number(trade.get("close_commission")),
         format_number(trade.get("profit")),

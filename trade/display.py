@@ -1,7 +1,8 @@
 import datetime
 from config import create_c
 from .book import breakeven
-from .logbook import format_yyyymmdd, short_put_collateral
+from .logbook import format_yymmdd, short_put_collateral
+from util import expand_yymmdd
 c=create_c()
 
 
@@ -72,7 +73,7 @@ class Displayer:
                 position.n,
                 round(float(avg_cost), 2),
                 round(be, 2),
-                format_yyyymmdd(startdate) if startdate else "",
+                format_yymmdd(startdate, missing="") if startdate else "",
                 lastPrice,
                 round(pl, 2)
             ]
@@ -125,16 +126,15 @@ class Displayer:
             strike = contract.strike if hasattr(contract, 'strike') else ""
             
 
-            if contract.secType == 'OPT' and startdate:
-                expiry_date = datetime.datetime.strptime(contract.lastTradeDateOrContractMonth, "%Y%m%d").date()
-                start_date = datetime.datetime.strptime(position.startdate, "%Y%m%d").date()
+            days, dte, dit = 1, 1, 1
+            start_text = expand_yymmdd(startdate)
+            expiry_text = expand_yymmdd(optexpire)
+            if contract.secType == 'OPT' and start_text and expiry_text:
+                expiry_date = datetime.datetime.strptime(expiry_text, "%Y%m%d").date()
+                start_date = datetime.datetime.strptime(start_text, "%Y%m%d").date()
                 days = (expiry_date - start_date).days + 1
                 dte = (expiry_date - datetime.date.today()).days + 1
                 dit = (datetime.date.today() - start_date).days + 1
-            else:
-                days = 1
-                dte = 1
-                dit = 1
             ppd = (premium / days)
             ppd_now = pl /dit
             
@@ -178,11 +178,10 @@ class Displayer:
                 itm_percentage,
                 position.n,
                 opttype,
-                startdate,
-                optexpire,
+                format_yymmdd(startdate, missing="") if startdate else "",
+                format_yymmdd(optexpire, missing="") if optexpire else "",
                 premium,
                 lastPrice,
-                
                 buyback,
                 pl,
                 days,
@@ -207,7 +206,7 @@ class Displayer:
                         cell = ""
                 elif column_label in c.portfolio_int_columns:
                     try:
-                        cell = f"{int(float(value))}"
+                        cell = f"{round(float(value))}"
                     except (ValueError, TypeError):
                         cell = ""
                 else:
@@ -246,8 +245,8 @@ class Displayer:
     def _create_strike_underlying_rule(self):
         """Rule for highlighting underlying price based on strike comparison"""
         return {
-            'columns': ['Strike', 'Underlying', 'Type'],
-            'target_column': 'Underlying',
+            'columns': ['Strike', 'UndLng', 'Type'],
+            'target_column': 'UndLng',
             'condition': lambda strike, underlying, type: (type == 'PUT' and underlying < strike) or (type == 'CALL' and underlying > strike),
             'colors': {'true': 'red', 'false': 'green'}
         }

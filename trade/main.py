@@ -10,21 +10,34 @@ from config import create_c
 from .controller import Controller
 from .display import Displayer
 from util import parse_premium, resolve_startdate
-from .logbook import compute_collar_totals, format_log_row, format_totals, short_put_notional
+from .logbook import compute_collar_totals, format_dashboard, format_log_row, short_put_notional
+from .log_chart import LogChartDialog
+from .open_prognosis import ask_deepseek, option_open_text, prognosis_prompt, stock_open_text
 from .records_ui import RecordsDialog
 from .screener_ui import SellPutsFrame, WatchlistDialog, accelerator as screener_accelerator
 c=create_c()
 
 class EditPositionDialog(wx.Dialog):
     def __init__(self, parent, controller, symbol="", instrument_id="", start_value="", premium_value=""):
-        super().__init__(parent, title="Edit Position", size=(400, 220))
+        super().__init__(parent, title="Edit Position", size=(680, 620))
         
         self.controller = controller  # Add controller reference
         self.symbol = symbol
         self.instrument_id = instrument_id
         self.start_value = start_value
+        self._alive = True
+        self._prompt_edited = False
+        self._filling_prompt = False
         position = controller.option_portfolio.get(instrument_id)
         self.is_long = bool(position is not None and (position.n or 0) > 0)
+        self.stock_open = None
+        self._contract = None
+        self._prev_close = None
+        if position is not None:
+            contract = position.contract
+            self._contract = contract
+            self._prev_close = getattr(position, "option_prev_close", None)
+            self.stock_open = getattr(position, "underlyingPrice", None)
         if self.is_long:
             try:
                 paid = parse_premium(premium_value)
@@ -34,6 +47,10 @@ class EditPositionDialog(wx.Dialog):
         self.premium_value = premium_value
         
         self.init_ui()
+        if hasattr(self.controller, "subscribe_volatility_indexes"):
+            self.controller.subscribe_volatility_indexes()
+        if self._contract is not None and not self._prev_close:
+            self.controller.request_option_prev_close(self.instrument_id, self)
         
     def init_ui(self):
         panel = wx.Panel(self)
@@ -68,6 +85,20 @@ class EditPositionDialog(wx.Dialog):
         self.txt_premium = wx.TextCtrl(panel, value=str(self.premium_value))
         hbox2.Add(lbl_premium, flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=8)
         hbox2.Add(self.txt_premium, proportion=1)
+
+        stock_row = wx.BoxSizer(wx.HORIZONTAL)
+        stock_row.Add(wx.StaticText(panel, label="Stock open:"), flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=8)
+        self.txt_stock_open = wx.TextCtrl(panel, value=stock_open_text(self.stock_open), style=wx.TE_READONLY)
+        stock_row.Add(self.txt_stock_open, proportion=1, flag=wx.RIGHT, border=16)
+        stock_row.Add(wx.StaticText(panel, label="Option open:"), flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=8)
+        self.txt_option_open = wx.TextCtrl(panel, value="", style=wx.TE_READONLY)
+        stock_row.Add(self.txt_option_open, proportion=1)
+        self._prompt_value = self._prompt_text(self._prev_close)
+        self.prompt = wx.TextCtrl(panel, value=self._prompt_value, style=wx.TE_MULTILINE)
+        self.prompt.Bind(wx.EVT_TEXT, self.on_prompt_edit)
+        self.ask = wx.Button(panel, label="Ask DeepSeek")
+        self.ask.Bind(wx.EVT_BUTTON, self.on_ask)
+        self.reply = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY)
         
         # Buttons
         hbox3 = wx.BoxSizer(wx.HORIZONTAL)
@@ -85,10 +116,83 @@ class EditPositionDialog(wx.Dialog):
         vbox.Add(hbox_id, flag=wx.EXPAND | wx.ALL, border=10)
         vbox.Add(hbox1, flag=wx.EXPAND | wx.ALL, border=10)
         vbox.Add(hbox2, flag=wx.EXPAND | wx.ALL, border=10)
+        vbox.Add(stock_row, flag=wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, border=10)
+        vbox.Add(self.prompt, proportion=1, flag=wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
+        vbox.Add(self.ask, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
+        vbox.Add(self.reply, proportion=1, flag=wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
         vbox.Add(hbox3, flag=wx.ALIGN_RIGHT | wx.ALL, border=10)
         
         panel.SetSizer(vbox)
-    
+        self.SetMinSize((680, 620))
+
+    def _volatility(self, symbol):
+        reader = getattr(self.controller, "volatility_price", None)
+        if reader is None:
+            return None
+        return reader(symbol)
+
+    def _prompt_text(self, prev_close):
+        vix = self._volatility("VIX")
+        position = None
+        if self.instrument_id:
+            position = self.controller.option_portfolio.get(self.instrument_id)
+        market = {}
+        if position is not None:
+            market = {
+                "stock_prev_close": getattr(position, "underlying_prev_close", None),
+                "implied_vol": getattr(position, "impliedVol", None),
+                "delta": getattr(position, "delta", None),
+            }
+        contract = self._contract
+        if contract is None:
+            return prognosis_prompt(self.symbol, "", "", "", self.stock_open, prev_close, vix, **market)
+        return prognosis_prompt(
+            contract.symbol,
+            getattr(contract, "right", ""),
+            getattr(contract, "lastTradeDateOrContractMonth", ""),
+            getattr(contract, "strike", ""),
+            self.stock_open,
+            prev_close,
+            vix,
+            **market,
+        )
+
+    def on_prompt_edit(self, event):
+        if not self._filling_prompt and self.prompt.GetValue() != self._prompt_value:
+            self._prompt_edited = True
+        event.Skip()
+
+    def receive_prev_close(self, prev_close):
+        if not self._alive or self._prompt_edited or self.prompt is None:
+            return
+        self._filling_prompt = True
+        self._prompt_value = self._prompt_text(prev_close)
+        self.prompt.SetValue(self._prompt_value)
+        self._filling_prompt = False
+
+    def on_ask(self, event):
+        text = self.prompt.GetValue()
+        self.ask.Disable()
+
+        def work():
+            result = ask_deepseek(text)
+            wx.CallAfter(self.show_option_open, result)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_option_open(self, result):
+        if not self._alive:
+            return
+        self.reply.SetValue(result or "")
+        self.txt_option_open.SetValue(option_open_text(result))
+        self.ask.Enable()
+
+    def Destroy(self):
+        self._alive = False
+        if getattr(self.controller, "_prev_close_listener", None) is self:
+            self.controller._prev_close_listener = None
+        return super().Destroy()
+
     def on_save(self, event):
         """Handle save button click"""
         start_value = resolve_startdate(self.txt_start.GetValue())
@@ -315,16 +419,26 @@ class MainFrame(wx.Frame):
         self.update_account_display()
 
     def render_totals(self):
-        """Fixed strip for the Log totals. Current value stays in the account label."""
-        self.totals_line1 = wx.StaticText(self.panel, label="")
-        self.totals_line2 = wx.StaticText(self.panel, label="")
-        font = self.totals_line1.GetFont()
-        font.SetPointSize(11)
-        self.totals_line1.SetFont(font)
-        self.totals_line2.SetFont(font)
+        """Grouped totals. Current account value stays in the header."""
+        self.totals_values = {}
+        strip = wx.BoxSizer(wx.HORIZONTAL)
+        strip.Add(self._metric_group("Since start", [
+            ("start", "Start"),
+            ("value_start", "Value start"),
+            ("days", "Days"),
+            ("trading", "Options"),
+            ("total", "Total"),
+            ("per_year", "Per year"),
+        ]), flag=wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=16)
+        strip.Add(self._metric_group("Collateral", [
+            ("collateral", "Amount"),
+            ("percentage", "Of account"),
+            ("max", "Max"),
+            ("limit", "70%"),
+            ("left", "Left"),
+        ]), flag=wx.ALIGN_CENTER_VERTICAL)
         self._totals_text = None
-        self.vbox.Add(self.totals_line1, flag=wx.LEFT | wx.RIGHT | wx.TOP, border=10)
-        self.vbox.Add(self.totals_line2, flag=wx.EXPAND | wx.LEFT | wx.RIGHT, border=10)
+        self.vbox.Add(strip, flag=wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, border=10)
 
         status_hbox = wx.BoxSizer(wx.HORIZONTAL)
         self.status_text = wx.StaticText(self.panel, label="", style=wx.ST_ELLIPSIZE_END)
@@ -342,6 +456,33 @@ class MainFrame(wx.Frame):
         self._status_text = None
         self.update_totals_display()
         self.update_status()
+
+    def _metric_group(self, title, fields):
+        box = wx.StaticBox(self.panel, label=title)
+        title_font = box.GetFont()
+        title_font.SetPointSize(12)
+        box.SetFont(title_font)
+        sizer = wx.StaticBoxSizer(box, wx.HORIZONTAL)
+        for key, caption in fields:
+            sizer.Add(self._metric(box, key, caption),
+                      flag=wx.LEFT | wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, border=10)
+        return sizer
+
+    def _metric(self, parent, key, caption):
+        column = wx.BoxSizer(wx.VERTICAL)
+        label = wx.StaticText(parent, label=caption)
+        value = wx.StaticText(parent, label="—")
+        label_font = label.GetFont()
+        label_font.SetPointSize(12)
+        label.SetFont(label_font)
+        label.SetForegroundColour(wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT))
+        value_font = value.GetFont()
+        value_font.SetPointSize(12)
+        value.SetFont(value_font)
+        column.Add(label)
+        column.Add(value, flag=wx.TOP, border=2)
+        self.totals_values[key] = value
+        return column
 
     def update_status(self):
         text = getattr(self.controller, "status_message", "") or ""
@@ -402,13 +543,13 @@ class MainFrame(wx.Frame):
             ),
             max_fraction=c.max_collateral_fraction,
         )
-        line1, line2 = format_totals(totals)
-        text = (line1, line2)
+        fields = format_dashboard(totals)
+        text = tuple(fields[key] for key in self.totals_values)
         if text == self._totals_text:
             return
         self._totals_text = text
-        self.totals_line1.SetLabel(line1)
-        self.totals_line2.SetLabel(line2)
+        for key, widget in self.totals_values.items():
+            widget.SetLabel(fields[key])
         self.panel.Layout()
 
     def _lock_grid_height(self, grid, visible_rows):
@@ -481,7 +622,7 @@ class MainFrame(wx.Frame):
     def on_portfolio_cell_click(self, event):
         """Handle click on portfolio grid cell"""
         row = event.GetRow()
-        
+
         # Get the instrument_id using the controller method
         instrument_id = self.controller.get_instrument_id_from_grid_row(row)
         if instrument_id is None:
@@ -520,7 +661,7 @@ class MainFrame(wx.Frame):
         
         dialog.Destroy()
         event.Skip()  # Allow normal grid processing
-    
+
     def get_column_index(self, label_name):
         """Get the column index for a given label"""
         try:
@@ -640,7 +781,11 @@ class MainFrame(wx.Frame):
         event.Skip()  # Allow normal grid processing
 
     def render_log(self):
-        lbl_log = wx.StaticText(self.panel, label="Log")
+        log_row = wx.BoxSizer(wx.HORIZONTAL)
+        log_row.Add(wx.StaticText(self.panel, label="Log"), flag=wx.ALIGN_CENTER_VERTICAL)
+        chart = wx.Button(self.panel, label="Chart")
+        chart.Bind(wx.EVT_BUTTON, self.open_log_chart)
+        log_row.Add(chart, flag=wx.LEFT, border=8)
         self.grid_log = wx.grid.Grid(self.panel)
         self.grid_log.CreateGrid(0, len(c.log_labels))
         self.grid_log.EnableEditing(False)
@@ -653,9 +798,15 @@ class MainFrame(wx.Frame):
             else:
                 attr.SetAlignment(wx.ALIGN_RIGHT, wx.ALIGN_CENTER)
             self.grid_log.SetColAttr(col, attr)
-        self.vbox.Add(lbl_log, flag=wx.LEFT | wx.TOP, border=8)
+        self.vbox.Add(log_row, flag=wx.LEFT | wx.TOP, border=8)
         self.vbox.Add(self.grid_log, proportion=1, flag=wx.EXPAND | wx.ALL, border=10)
         self.fill_log_grid()
+
+    def open_log_chart(self, event=None):
+        trades = getattr(self.controller, "log_trades", None) or []
+        dialog = LogChartDialog(self, trades)
+        dialog.ShowModal()
+        dialog.Destroy()
 
     def fill_log_grid(self):
         trades = getattr(self.controller, "log_trades", None) or []
@@ -668,7 +819,19 @@ class MainFrame(wx.Frame):
         for row, trade in enumerate(trades):
             for col, value in enumerate(format_log_row(trade)):
                 grid.SetCellValue(row, col, value)
-        grid.AutoSizeColumns()
+        self.fit_log_columns()
+
+    def fit_log_columns(self):
+        """Size each log column from the grid's own text, then add a gap.
+
+        A bare memory context under-measures on this display, which left the
+        headers and dates clipped.
+        """
+        grid = self.grid_log
+        grid.AutoSizeColumns(False)
+        extra = 28
+        for col in range(grid.GetNumberCols()):
+            grid.SetColSize(col, grid.GetColSize(col) + extra)
 
     def update_stock_data(self, row, cost):
         """Update the stock position data in the controller"""

@@ -3,8 +3,8 @@ import datetime
 import math
 import re
 
-AFTER_CLOSE = "time-after-hours"
 SYMBOL_RE = re.compile(r"[A-Z][A-Z0-9.]{0,9}$")
+EARNINGS_SOON_DAYS = 28
 
 
 def normalize_symbol(text):
@@ -200,20 +200,12 @@ def recommend(rows, target=0.25, band=(0.20, 0.30)):
     return min(usable, key=lambda r: (abs(abs(r["delta"]) - target), -r["strike"]))
 
 
-def earnings_flag(symbol, expiry, calendar, failed_days):
-    """True, False, or None when a day that matters could not be read."""
-    symbol = symbol.upper()
-    for day, rows in calendar.items():
-        entry = rows.get(symbol)
-        if entry is None:
-            continue
-        if day < expiry:
-            return True
-        if day == expiry and entry != AFTER_CLOSE:
-            return True
-    if any(day <= expiry for day in failed_days):
-        return None
-    return False
+def earnings_due_soon(day, today, within_days=EARNINGS_SOON_DAYS):
+    """True when earnings falls inside the next four weeks, including today."""
+    if day is None or today is None:
+        return False
+    delta = (day - today).days
+    return 0 <= delta <= within_days
 
 
 def evaluate_symbol(scan, cfg):
@@ -261,33 +253,27 @@ def dte(expiry, today):
     return (parse_day(expiry) - today).days
 
 
-def rank(rows, tie=0.0002):
-    """Ranked rows first, then flagged or incomplete rows, then rows that could not be read."""
-    def group(r):
-        if r["pick"] is None:
-            return 2
-        if r.get("earnings") is True or r["y25"] is None:
-            return 1
-        return 0
+def row_yield(row):
+    """Yield of the recommended put, the percent shown in the Yield column."""
+    pick = row.get("pick") or {}
+    value = pick.get("yield")
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
-    def score(r):
-        if r["y25"] is not None:
-            return r["y25"]
-        return r["pick"]["yield"] if r["pick"] else 0
 
-    ordered = sorted(rows, key=lambda r: (group(r), -score(r), r["symbol"]))
-    changed = True
-    while changed:
-        changed = False
-        for i in range(len(ordered) - 1):
-            a, b = ordered[i], ordered[i + 1]
-            if group(a) or group(b) or a["y25"] is None or b["y25"] is None:
-                continue
-            if abs(a["y25"] - b["y25"]) < tie and (b.get("ivhv") or 0) > (a.get("ivhv") or 0):
-                ordered[i], ordered[i + 1] = b, a
-                changed = True
-    for position, r in enumerate(ordered, start=1):
-        r["rank"] = position if group(r) == 0 else None
+def rank(rows):
+    """Highest yield first. A row with no yield stays at the bottom."""
+    ordered = sorted(rows, key=lambda r: (
+        row_yield(r) is None, -(row_yield(r) or 0.0), r.get("symbol") or "",
+    ))
+    position = 0
+    for row in ordered:
+        if row_yield(row) is None:
+            row["rank"] = None
+        else:
+            position += 1
+            row["rank"] = position
     return ordered
 
 
@@ -316,10 +302,11 @@ def expiry_short(expiry):
     return text
 
 
-def earnings_text(flag):
-    if flag is True:
-        return "before"
-    if flag is None:
+def earnings_text(date, unknown=False):
+    """Month-day of the next earnings, unk when the calendar could not be read."""
+    if isinstance(date, datetime.date):
+        return f"{date.month:02d}-{date.day:02d}"
+    if unknown:
         return "unk"
     return ""
 
@@ -347,7 +334,7 @@ def format_screener_row(row):
             vol_text(row.get("iv")),
             vol_text(row.get("hv")),
             f"{row['ivhv']:.2f}" if row.get("ivhv") else "",
-            earnings_text(row.get("earnings")),
+            earnings_text(row.get("earnings_date"), row.get("earnings_unknown")),
             "",
             "",
             row.get("held") or "",
@@ -370,7 +357,7 @@ def format_screener_row(row):
         vol_text(row.get("iv")),
         vol_text(row.get("hv")),
         f"{row['ivhv']:.2f}" if row.get("ivhv") else "",
-        earnings_text(row.get("earnings")),
+        earnings_text(row.get("earnings_date"), row.get("earnings_unknown")),
         fits_text(row.get("fits")),
         money_text(pick.get("breakeven")),
         row.get("held") or "",

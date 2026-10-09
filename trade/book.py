@@ -271,16 +271,29 @@ class SymbolBook:
             else:
                 closings.append(iid)
 
-        if openings and closings:
-            if len(openings) != 1:
-                self.problem("roll into more than one contract")
-                return
+        if self.is_roll(legs, closings, openings):
             self.apply_roll(legs, closings, openings[0])
             return
         for iid in closings:
             self.apply_close(iid, legs[iid])
         for iid in openings:
             self.apply_open(iid, legs[iid])
+
+    def is_roll(self, legs, closings, openings):
+        """One existing position moved to a new strike or expiry, same contract count.
+
+        A roll keeps the number of contracts. The new contract takes the previous
+        position's start date; premium and commission are adjusted for both fills.
+        A different count is a close plus an open.
+        """
+        if len(closings) != 1 or len(openings) != 1:
+            return False
+        source, target = legs[closings[0]], legs[openings[0]]
+        if target["n0"] != 0:
+            return False
+        closed = abs(source["n0"]) - abs(source["n1"])
+        opened = abs(target["n1"]) - abs(target["n0"])
+        return closed == opened and closed > 0
 
     def apply_open(self, iid, leg):
         doc, created = self.ensure_option(iid, leg["fill"], leg["date"])
@@ -318,7 +331,7 @@ class SymbolBook:
     def apply_roll(self, legs, closings, target_id):
         transferred = sum(leg["cash"] for leg in legs.values())
         carried_commission = 0.0
-        startdates = []
+        previous_start = None
         described = []
         target = self.options.get(target_id)
         tracked = target is None or target.get("open_commission") is not None
@@ -335,21 +348,21 @@ class SymbolBook:
             doc["premium"] = float(doc.get("premium") or 0.0) - slice_
             doc["n"] = leg["n1"]
             if doc.get("startdate"):
-                startdates.append(doc["startdate"])
+                previous_start = doc["startdate"]
             described.append(describe(doc))
         leg = legs[target_id]
         doc, created = self.ensure_option(target_id, leg["fill"], leg["date"])
-        if not created and doc.get("startdate"):
-            startdates.append(doc["startdate"])
         doc["premium"] = float(doc.get("premium") or 0.0) + transferred
         doc["n"] = leg["n1"]
+        doc["strike"] = float(leg["fill"]["strike"])
+        doc["expiry"] = str(leg["fill"]["expiry"])
         if tracked:
             previous = 0.0 if created else float(doc.get("open_commission") or 0.0)
             doc["open_commission"] = round(previous + carried_commission + leg["commission"], 6)
         elif created:
             doc.pop("open_commission", None)
-        if startdates:
-            doc["startdate"] = min(startdates)
+        if previous_start:
+            doc["startdate"] = previous_start
         self.outcome.messages.append(
             f"Rolled {', '.join(described)} → {describe(doc)}, premium ${doc['premium']:,.2f}"
         )

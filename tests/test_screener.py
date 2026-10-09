@@ -3,7 +3,7 @@ import datetime
 
 from config import create_c
 from trade.screener import (
-    candidate_strikes, company_display_name, earnings_flag, evaluate_symbol,
+    candidate_strikes, company_display_name, earnings_due_soon, earnings_text, evaluate_symbol,
     format_candidate_row, format_screener_row, held_text, normalize_symbol,
     normalize_watchlist, put_delta, rank, sessions_after, target_expiry,
     watchlist_from_store, watchlist_names, yield_at_delta,
@@ -83,17 +83,67 @@ def test_missing_quote_status():
     assert no_delta["status"] == "no delta"
 
 
-def test_earnings_flag():
-    expiry = d("20261009")
-    calendar = {d("20261006"): {"AMD": "time-after-hours"}, d("20261009"): {"KO": "time-after-hours",
-                                                                          "V": "time-pre-market",
-                                                                          "JPM": "time-not-supplied"}}
-    assert earnings_flag("AMD", expiry, calendar, []) is True
-    assert earnings_flag("KO", expiry, calendar, []) is False
-    assert earnings_flag("V", expiry, calendar, []) is True
-    assert earnings_flag("JPM", expiry, calendar, []) is True
-    assert earnings_flag("MSFT", expiry, calendar, [d("20261007")]) is None
-    assert earnings_flag("MSFT", expiry, calendar, []) is False
+def test_earnings_date_and_soon_window():
+    today = d("20261003")
+    assert earnings_text(d("20261103")) == "11-03"
+    assert earnings_text(None) == ""
+    assert earnings_text(None, unknown=True) == "unk"
+    assert earnings_due_soon(d("20261003"), today) is True
+    assert earnings_due_soon(d("20261031"), today) is True
+    assert earnings_due_soon(d("20261101"), today) is False
+    assert earnings_due_soon(d("20261002"), today) is False
+    assert earnings_due_soon(None, today) is False
+
+
+def test_next_earnings_keeps_earliest_date_and_retries():
+    import trade.earnings as earnings
+    calls = []
+
+    def fake(day, timeout=10, attempts=3):
+        calls.append((day, attempts))
+        if day == d("20261005"):
+            raise OSError("calendar down")
+        if day == d("20261006"):
+            return {"AMD": "time-after-hours"}
+        if day == d("20261007"):
+            return {"KO": "time-pre-market", "AMD": "time-after-hours"}
+        return {}
+
+    original = earnings.fetch_day
+    earnings.fetch_day = fake
+    try:
+        dates, failed = earnings.fetch_next_earnings(
+            ["amd", "KO"], d("20261003"), horizon_days=10, pause=0,
+        )
+    finally:
+        earnings.fetch_day = original
+    assert calls and all(attempts == 3 for _, attempts in calls)
+    assert dates["AMD"] == d("20261006")
+    assert dates["KO"] == d("20261007")
+    assert failed is True
+    assert d("20261003") not in [day for day, _ in calls]
+    assert d("20261004") not in [day for day, _ in calls]
+
+
+def test_fetch_day_retries_three_times():
+    import trade.earnings as earnings
+    tries = {"n": 0}
+
+    def boom(request, timeout=10):
+        tries["n"] += 1
+        raise OSError("calendar down")
+
+    original = earnings.urllib.request.urlopen
+    earnings.urllib.request.urlopen = boom
+    try:
+        try:
+            earnings.fetch_day(d("20261006"), attempts=3)
+            assert False, "expected the calendar read to fail"
+        except OSError:
+            pass
+    finally:
+        earnings.urllib.request.urlopen = original
+    assert tries["n"] == 3
 
 
 def row(symbol, y25, ivhv=1.0, earnings=False, pick=True):
@@ -106,8 +156,8 @@ def test_rank():
         row("A", 0.0100), row("B", 0.0120, earnings=True), row("C", 0.0101, ivhv=1.5),
         row("D", None), row("E", 0.02, pick=False), row("F", 0.0090),
     ])
-    assert [r["symbol"] for r in ranked] == ["C", "A", "F", "B", "D", "E"]
-    assert [r["rank"] for r in ranked] == [1, 2, 3, None, None, None]
+    assert [r["symbol"] for r in ranked] == ["B", "C", "A", "F", "D", "E"]
+    assert [r["rank"] for r in ranked] == [1, 2, 3, 4, 5, None]
 
 
 def test_held_text_and_row_format():
@@ -119,10 +169,11 @@ def test_held_text_and_row_format():
     assert held_text("SHOP", options, stocks, lambda p: 195.95) == "400 sh, BE 195.95"
     row = evaluate_symbol({"symbol": "AMD", "spot": 600, "iv": 0.5, "hv": 0.4,
                            "expiry": "20261009", "quotes": [quote(570, 4.0, 4.3, -0.22)]}, CFG)
-    row.update({"dte": 11, "earnings": False, "fits": 3, "held": "2 × 580.00P 10-16", "rank": 1})
+    row.update({"dte": 11, "earnings_date": d("20261103"), "fits": 3, "held": "2 × 580.00P 10-16", "rank": 1})
     cells = format_screener_row(row)
     assert len(cells) == 20
     assert cells[0] == "AMD" and cells[2] == "10-09" and cells[4] == "570.00"
+    assert cells[16] == "11-03"
     assert cells[17] == "3"
     assert cells[19] == "2 × 580.00P 10-16"
     detail = format_candidate_row(row["candidates"][0])

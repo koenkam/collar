@@ -17,13 +17,13 @@ COLUMNS = [
     ("Ask", 48, "Ask of the recommended put."),
     ("Fill", 48, "Assumed sale price: bid plus a quarter of the way to the ask."),
     ("Prem", 56, "Dollar premium per contract at the fill, after commission."),
-    ("Yield", 52, "Premium as a percent of cash posted (strike × 100) on the recommended put."),
+    ("Yield", 52, "Premium as a percent of cash posted (strike × 100) on the recommended put. The list is sorted by this, highest first."),
     ("Ann", 56, "Yield scaled to a year: yield × 365 / DTE. Display only."),
-    ("Y25", 52, "Yield interpolated to delta −0.25, so names can be ranked at the same risk. Pick the name with this; trade the recommended strike."),
+    ("Y25", 52, "Yield interpolated to delta −0.25, so names can be compared at the same risk."),
     ("IV", 50, "30-day implied volatility of the stock, from Interactive Brokers."),
     ("HV", 50, "30-day historical volatility: how much the stock has actually moved."),
     ("IV/HV", 50, "Implied divided by historical. Above 1, options look rich vs recent moves; below 1 the row is dimmed."),
-    ("Earn", 48, "Earnings before this expiry (or unknown if the calendar could not be read). Ranked below names with a clear calendar."),
+    ("Earn", 58, "Next earnings date. Orange when it falls within the next four weeks."),
     ("Fits", 40, "How many contracts fit in the 70% cash reserve after current short puts. over = cannot fit one."),
     ("BE", 56, "Break-even if assigned: strike minus fill, per share."),
     ("Held", 140, "What you already hold on this symbol: short puts and/or shares."),
@@ -241,6 +241,7 @@ class SellPutsFrame(wx.Frame):
         self.controller = controller
         self._version = None
         self._symbol = None
+        self._placing = False
         self.init_ui()
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.timer = wx.Timer(self)
@@ -322,25 +323,72 @@ class SellPutsFrame(wx.Frame):
         if version == self._version:
             return
         self._version = version
-        rows = list(scan.rows) if scan else []
-        self.list.DeleteAllItems()
-        highlight = wx.Colour(30, 80, 30)
-        dim = wx.Colour(120, 120, 120)
-        top = True
-        for row in rows:
-            values = format_screener_row(row)
-            index = self.list.InsertItem(self.list.GetItemCount(), values[0])
-            for col, value in enumerate(values[1:], start=1):
-                self.list.SetItem(index, col, value)
-            if row.get("rank") == 1 and top:
-                self.list.SetItemBackgroundColour(index, highlight)
-                top = False
-            elif row.get("ivhv") is not None and row["ivhv"] < 1.0:
-                self.list.SetItemTextColour(index, dim)
+        self.place_rows(list(scan.rows) if scan else [])
         if self._symbol:
             self.show_candidates(self._symbol)
 
+    def place_rows(self, rows):
+        """Insert each finished symbol on the row its yield sorts to."""
+        selected = self._symbol
+        self._placing = True
+        try:
+            wanted = {row.get("symbol") for row in rows}
+            index = 0
+            while index < self.list.GetItemCount():
+                if self.list.GetItemText(index, 0) not in wanted:
+                    self.list.DeleteItem(index)
+                else:
+                    index += 1
+            for index, row in enumerate(rows):
+                symbol = row.get("symbol") or ""
+                current = self.find_symbol(symbol)
+                values = format_screener_row(row)
+                if current < 0:
+                    self.insert_row(index, values)
+                elif current != index:
+                    self.list.DeleteItem(current)
+                    self.insert_row(index, values)
+                else:
+                    self.write_row(index, values)
+                self.style_row(index, row)
+        finally:
+            self._placing = False
+        if selected:
+            kept = self.find_symbol(selected)
+            if kept >= 0:
+                self.list.Select(kept, True)
+
+    def find_symbol(self, symbol):
+        for index in range(self.list.GetItemCount()):
+            if self.list.GetItemText(index, 0) == symbol:
+                return index
+        return -1
+
+    def insert_row(self, index, values):
+        self.list.InsertItem(index, values[0])
+        for col, value in enumerate(values[1:], start=1):
+            self.list.SetItem(index, col, value)
+
+    def write_row(self, index, values):
+        for col, value in enumerate(values):
+            if self.list.GetItemText(index, col) != value:
+                self.list.SetItem(index, col, value)
+
+    def style_row(self, index, row):
+        if row.get("rank") == 1:
+            self.list.SetItemBackgroundColour(index, wx.Colour(30, 80, 30))
+        else:
+            self.list.SetItemBackgroundColour(index, self.list.GetBackgroundColour())
+        if row.get("earnings_soon"):
+            self.list.SetItemTextColour(index, wx.Colour(255, 176, 46))
+        elif row.get("rank") != 1 and row.get("ivhv") is not None and row["ivhv"] < 1.0:
+            self.list.SetItemTextColour(index, wx.Colour(120, 120, 120))
+        else:
+            self.list.SetItemTextColour(index, self.list.GetForegroundColour())
+
     def on_select(self, event):
+        if self._placing:
+            return
         index = event.GetIndex()
         self._symbol = self.list.GetItemText(index, 0)
         self.show_candidates(self._symbol)

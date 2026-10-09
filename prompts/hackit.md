@@ -157,3 +157,31 @@ broadcom
 - disply 70% as the current value for the max total collateral as a percentage of the total portfolio value
 
 24. in the 'sell puts' popup, order the grid based on the yield% in descending order. when scanning entries, put them aotomatically 1 by 1 on the correct row.
+
+25. the dashboard are just 2 lines of printed data. Improve the layout and make the font a tiny bit larger. Make sure corresponding items are grouped together.
+
+26. from a public website (finance.yahoo.com or similar), retrieve for each option candidate the earnings date and display it in the 'sell puts' grid.
+    this action should be repeated 3 times on failure.
+    any other site that has the earnings date, or TWS, is also great as a source.
+    replace the value in the 'earn' column with the date of the earnings and add a color if the earnings is due in the next 4 weeks.
+
+27. Write a plan called "AI_open_prognosis.md"
+    The goal is to write an AI-driven predictor of the opening price of an option.
+
+add a column to the top grid called 'Open' with the expected opening value of the option. This only applies to short puts and short calls. this only applies to the period before opening. If no expected opening is known, do not display anything. if the market is open, do not display anything.
+Update the estimated opening price, using the same frequency as the other data retrieved from TWS
+
+when a valid open price is known, Add a small action button next to the open value. When the user clicks on that action button:
+
+A. Retrieve the close price of that option from the previous trading day
+B. show a popup with a prompt that displays this text:
+
+"Calculate the open price for the option [stock symbol] [put/call] [expiry] [strike] based on the expected opening price for [stock symbol] of [expected opening]. The option closed on the previous trading day at [prev_close]. Do not guess - make a calculated estimate. Take into account if there is any recent news for the stock, including earnings, profit warnings, director changes, or any other news that will significantly impact the price of the underlying and thus the price of the option. Create the shortest possible answer for your price estimate and any news that impacted the price of the option"
+
+Allow the user to edit this text.
+
+Add an action button to that option to submit the result to the deepseek api. get the api key from deepseek from this computer from the ~/code/autobalance which i added to the workspace.
+
+in the popup, display the return value from deepseek.
+
+28. implement prompts/AI_open_prognosis.md

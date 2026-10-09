@@ -111,9 +111,9 @@ More contracts at the same strike and expiry. Not a roll.
 
 ### Roll
 
-A buy of one contract and a sell of another, same symbol and right, different strike or expiry, filled together or as a combo. The contract count may change. SPX rolls the same way.
+A buy of one existing position and a sell of another, same symbol and right, different strike or expiry, filled together or as a combo. The number of contracts stays the same. A different count is a close plus an open. SPX rolls the same way.
 
-The old document is removed and the new one written in one transaction. `startdate` is copied. New `premium` is the old premium plus the net of both fills, each net of its commission. No log row, including when the roll reduces the contract count.
+The old document is removed, or reduced when only part of it is rolled, and the new one written in the same transaction. `startdate` is the previous position's start date. New `premium` is that position's premium plus the net of both fills, each net of its commission, and `open_commission` carries the same way. Strike and expiry become the new contract. No log row.
 
 A close and an open on different symbols, or a put closed and a call opened, are a close plus an open.
 

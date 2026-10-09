@@ -11,7 +11,7 @@ from .book import as_count, describe, option_id, reconcile, stock_id
 from .firestore import FirestoreDB, log_sequence, sort_log
 from .put_scan import PutScan
 from .screener import company_display_name, normalize_watchlist, watchlist_from_store, watchlist_names
-from .sheetstofirestore import sheets_to_firestore, update_collar_account_value
+from .sheetstofirestore import update_collar_account_value
 from util import Stub
 import threading
 
@@ -20,9 +20,6 @@ UNSET_COMMISSION = 1e300
 class Controller:
 
     def __init__(self, gui_to_ib, ib_to_gui):
-        print('Running sheets_to_firestore()...')
-        sheets_to_firestore()
-        print('Finished sheets_to_firestore()')
         self.ib_to_gui = ib_to_gui
         self.gui_to_ib = gui_to_ib
         print('Initializing FirestoreDB in Controller...')
@@ -75,6 +72,9 @@ class Controller:
         self.last_account_summary_request = 0
         self.account_value_synced_to_sheet = False
         self.net_liquidation_by_currency = {}
+        self._prev_close_wait = set()
+        self._prev_close_listener = None
+        self.index_prices = {}
     
     def get_connection_status(self):
         if not hasattr(self, 'last_successful_connection'):
@@ -281,6 +281,8 @@ class Controller:
                     self.handle_watchlist_details(command_type, self.incoming_command["kwargs"], command)
                     continue
                 if command_type == "reqError":
+                    if command.get("owner") == "open_prognosis":
+                        self.finish_option_prev_close(incoming_request_id, None)
                     continue
                 if hasattr(self, f"handle_{command_type}"):
                     handler = getattr(self, f"handle_{command_type}")
@@ -379,12 +381,20 @@ class Controller:
         if price is None or price <= 0:
             return
             
+        tick = self.incoming_command["kwargs"].get("tickType")
         if contract.secType in ("STK", "IND"):
-            self.handle_tickPrice_stock(instrument_id, contract, price)
+            self.handle_tickPrice_stock(instrument_id, contract, price, tick)
         elif contract.secType == "OPT":
-            self.handle_tickPrice_option(instrument_id, contract, price)
+            self.handle_tickPrice_option(instrument_id, contract, price, tick)
 
-    def handle_tickPrice_stock(self, instrument_id, contract, price):
+    def handle_tickPrice_stock(self, instrument_id, contract, price, tick=None):
+        if tick == 4 and contract.symbol == "VIX":
+            self.index_prices[contract.symbol] = price
+        if tick == 35:
+            return
+        if tick == 9:
+            self._set_underlying_field(contract.symbol, "underlying_prev_close", price)
+            return
         self.underlying[contract.symbol] = price
         # Update underlying price for ALL matching options
         updates_made = False
@@ -406,10 +416,28 @@ class Controller:
             self.stock_portfolio[instrument_id].lastPrice = price
             self.stock_portfolio[instrument_id].dirty = True
             self.displayer.updatePortfolioDisplay()
-            
 
-    def handle_tickPrice_option(self, instrument_id, contract, price):
-        if self.incoming_command["kwargs"].get("tickType") in (1, 2, 4): 
+    def _set_underlying_field(self, symbol, field, price):
+        """Previous close stays off UndLng and Last."""
+        updates = False
+        for position in self.option_portfolio.values():
+            contract = position.contract
+            if contract.secType == "OPT" and contract.symbol == symbol:
+                setattr(position, field, price)
+                position.dirty = True
+                updates = True
+        if updates and self.displayer:
+            self.displayer.updatePortfolioDisplay()
+
+    def handle_tickPrice_option(self, instrument_id, contract, price, tick=None):
+        if tick == 9:
+            if instrument_id in self.option_portfolio:
+                self.option_portfolio[instrument_id].option_prev_close = price
+                self.option_portfolio[instrument_id].dirty = True
+                if self.displayer:
+                    self.displayer.updatePortfolioDisplay()
+            return
+        if tick in (1, 2, 4):
             if instrument_id in self.option_portfolio:
                 if not hasattr(self.option_portfolio[instrument_id], 'lastPrice'):
                     self.option_portfolio[instrument_id].lastPrice = None
@@ -593,6 +621,74 @@ class Controller:
             self.subscribed.add(key)
             self.market_data(underlying)
 
+    def request_option_prev_close(self, instrument_id, listener=None):
+        """Use the stored previous close, or ask TWS for the last daily bar."""
+        if listener is not None:
+            self._prev_close_listener = listener
+        position = self.option_portfolio.get(instrument_id)
+        if position is None:
+            return
+        close = getattr(position, "option_prev_close", None)
+        if close:
+            self._notify_prev_close(instrument_id, close)
+            return
+        if instrument_id in self._prev_close_wait:
+            return
+        self._prev_close_wait.add(instrument_id)
+        self.sendIbCommand({
+            "method_name": "reqHistoricalData",
+            "contract": position.contract,
+            "endDateTime": "",
+            "durationStr": "2 D",
+            "barSizeSetting": "1 day",
+            "whatToShow": "TRADES",
+            "useRTH": 1,
+            "formatDate": 1,
+            "keepUpToDate": False,
+            "chartOptions": [],
+        }, extra={"owner": "open_prognosis", "instrument_id": instrument_id, "closes": []})
+
+    def handle_historicalData(self):
+        req_id = self.incoming_command["kwargs"].get("reqId")
+        request = self.requests.get(req_id)
+        if not request or request.get("owner") != "open_prognosis":
+            return
+        bar = self.incoming_command["kwargs"].get("bar")
+        close = getattr(bar, "close", None)
+        if close is None or close <= 0:
+            return
+        request.setdefault("closes", []).append((str(getattr(bar, "date", "")), close))
+
+    def handle_historicalDataEnd(self):
+        req_id = self.incoming_command["kwargs"].get("reqId")
+        request = self.requests.get(req_id)
+        if not request or request.get("owner") != "open_prognosis":
+            return
+        closes = sorted(request.get("closes") or [])
+        prev = closes[-1][1] if closes else None
+        self.finish_option_prev_close(req_id, prev)
+
+    def finish_option_prev_close(self, req_id, prev_close):
+        request = self.requests.pop(req_id, None)
+        if request is None:
+            return
+        instrument_id = request.get("instrument_id")
+        self._prev_close_wait.discard(instrument_id)
+        self.gui_to_ib.put({"method_name": "cancelHistoricalData", "reqId": req_id})
+        position = self.option_portfolio.get(instrument_id)
+        if position is not None and prev_close:
+            position.option_prev_close = prev_close
+            position.dirty = True
+            if self.displayer:
+                self.displayer.updatePortfolioDisplay()
+        self._notify_prev_close(instrument_id, prev_close)
+
+    def _notify_prev_close(self, instrument_id, prev_close):
+        listener = self._prev_close_listener
+        if listener is None or getattr(listener, "instrument_id", None) != instrument_id:
+            return
+        listener.receive_prev_close(prev_close)
+
     def subscribe_stock(self, contract):
         key = f"STK_{contract.symbol}"
         if key in self.subscribed:
@@ -606,8 +702,28 @@ class Controller:
         stock.primaryExchange = contract.primaryExchange or ""
         self.market_data(stock)
 
+    def subscribe_volatility_indexes(self):
+        """Keep a live last price for VIX so the edit prompt can quote it."""
+        key = "IND_VIX"
+        if key in self.subscribed:
+            return
+        contract = Contract()
+        contract.symbol = "VIX"
+        contract.secType = "IND"
+        contract.exchange = "CBOE"
+        contract.currency = "USD"
+        self.subscribed.add(key)
+        self.market_data(contract)
+
+    def volatility_price(self, symbol):
+        price = self.index_prices.get(symbol)
+        if price:
+            return price
+        return self.underlying.get(symbol)
+
     def handle_positionEnd(self):
         self.positions_ready = True
+        self.subscribe_volatility_indexes()
         self.schedule_book(0)
         self.finalizePortfolioDisplay()
 

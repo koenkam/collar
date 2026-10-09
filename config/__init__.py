@@ -30,7 +30,7 @@ def find_project_root(start_path=None):
 
 def gui(c):
     c.portfolio_labels =  \
-        ["Symbol", "Strike", "Underlying", "ITM%", "N", "Type", "Start"]
+        ["Symbol", "Strike", "UndLng", "ITM%", "N", "Type", "Start"]
     c.portfolio_labels += ["Expire", "Premium", "Last", "Buyback", "PL"]
     c.portfolio_labels += [ "Days",
                 "DIT",
@@ -38,10 +38,9 @@ def gui(c):
                 "PPD",
                 "PPD_NOW"]
     c.portfolio_labels += ["Collat", "Assign", "Close@", "Order", "Order_n", "Order_lim"]
-    c.portfolio_float_columns = ["Strike", "Underlying", "ITM%", "Premium", 
-                                 "Last", "Buyback", "PL", "PPD", "PPD_NOW", "Collat", "Assign",
-                                  "Close@", "Order_lim"]
-    c.portfolio_int_columns = ["N", "Days", "DIT", "DTE", "Order_n"]
+    c.portfolio_float_columns = ["Strike", "UndLng", "ITM%", "Premium",
+                                 "Last", "PL", "PPD", "PPD_NOW", "Close@", "Order_lim"]
+    c.portfolio_int_columns = ["N", "Days", "DIT", "DTE", "Buyback", "Collat", "Assign", "Order_n"]
     c.portfolio_columns_left = ["Symbol", "Type"]
     c.itm_threshold = 2.0  # ITM% threshold to consider option ITM
     c.stock_labels = ["Symbol", "N", "Buy", "Break-even", "Date", "Last", "Profit"]

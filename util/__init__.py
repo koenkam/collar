@@ -139,11 +139,22 @@ def startdate_is_undefined(value):
     text = str(value).strip()
     return text in ("", "None", "none", "nan", "NaN")
 
+def expand_yymmdd(value):
+    """YYYYMMDD, or the grid's YYMMDD, as YYYYMMDD. None when it is neither."""
+    text = str(value or "").strip()
+    if len(text) == 8 and text.isdigit():
+        return text
+    if len(text) == 6 and text.isdigit():
+        year = int(text[:2])
+        return ("19" if year >= 70 else "20") + text
+    return None
+
+
 def resolve_startdate(value):
     """Return YYYYMMDD, defaulting to today when the date is not defined."""
     if startdate_is_undefined(value):
         return datetime.datetime.now().strftime("%Y%m%d")
-    return str(value).strip()
+    return expand_yymmdd(value) or str(value).strip()
 
 def parse_premium(value):
     """Parse premium input such as $ 1,450.23, $1,203.10, $231.40, 10, $10,500."""

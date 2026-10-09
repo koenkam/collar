@@ -1,4 +1,5 @@
-"""Earnings dates from Nasdaq's public calendar."""
+"""Next earnings dates from Nasdaq's public calendar."""
+import datetime
 import json
 import time
 import urllib.request
@@ -9,6 +10,8 @@ HEADERS = {
                   "(KHTML, like Gecko) Version/17.0 Safari/605.1.15",
     "Accept": "application/json",
 }
+HORIZON_DAYS = 120
+ATTEMPTS = 3
 
 
 def fetch_day(day, timeout=10, attempts=3):
@@ -28,13 +31,38 @@ def fetch_day(day, timeout=10, attempts=3):
     raise last
 
 
-def fetch_calendar(days):
-    """Return (calendar, failed_days). Calendar maps each day to {symbol: time}."""
-    calendar, failed = {}, []
-    for day in days:
+def fetch_next_earnings(symbols, start, horizon_days=HORIZON_DAYS, attempts=ATTEMPTS, pause=0.2):
+    """Earliest earnings date on or after `start` for each symbol.
+
+    Weekdays are read until every symbol has a date or the horizon ends.
+    A day that still fails after `attempts` tries is skipped. Returns
+    ({symbol: date}, failed). `failed` is true when any day could not be read,
+    so a missing symbol may simply have been on a day the calendar omitted.
+    """
+    wanted, seen = [], set()
+    for symbol in symbols:
+        key = str(symbol or "").strip().upper()
+        if key and key not in seen:
+            seen.add(key)
+            wanted.append(key)
+    found = {}
+    failed = False
+    day = start
+    last = start + datetime.timedelta(days=horizon_days)
+    while day <= last and len(found) < len(wanted):
+        if day.weekday() >= 5:
+            day += datetime.timedelta(days=1)
+            continue
         try:
-            calendar[day] = fetch_day(day)
+            rows = fetch_day(day, attempts=attempts)
         except Exception as e:
             print(f"Earnings calendar {day}: {e}")
-            failed.append(day)
-    return calendar, failed
+            failed = True
+        else:
+            for symbol in wanted:
+                if symbol not in found and symbol in rows:
+                    found[symbol] = day
+        if pause and len(found) < len(wanted) and day < last:
+            time.sleep(pause)
+        day += datetime.timedelta(days=1)
+    return found, failed

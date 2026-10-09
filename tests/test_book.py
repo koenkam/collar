@@ -124,33 +124,78 @@ def test_partial_close_slices_opening_commission():
     assert out.options[iid]["open_commission"] == 0.63
 
 
-def test_roll_carries_opening_commission():
+def test_put_roll_keeps_count_start_and_adjusts_premium():
     old, _ = held("AMD", 0, 600, "P", "20261009")
-    new, entry = held("AMD", -3, 580, "P", "20261016")
+    new, entry = held("AMD", -4, 580, "P", "20261023")
     book = {old: opt("AMD", 600, "P", "20261009", -4, 4638.15, "20260925", open_commission=1.85)}
     out = only(reconcile(book, {}, {new: entry}, [
         fill("e1", "AMD", "BOT", 4, 9.0, 2.0, 600, "P", "20261009", ts=100),
-        fill("e2", "AMD", "SLD", 3, 14.0, 1.5, 580, "P", "20261016", ts=160),
-    ], TODAY, CFG))
-    doc = out.options[new]
-    assert doc["open_commission"] == round(1.85 + 2.0 + 1.5, 6)
-    price = (doc["premium"] + doc["open_commission"]) / (3 * 100)
-    assert round(price, 6) == round(5240 / 300, 6)
-
-
-def test_roll_keeps_start_and_carries_premium_with_count_change():
-    old, _ = held("AMD", 0, 592.5, "P", "20260930")
-    new, entry = held("AMD", -3, 580, "P", "20261016")
-    book = {old: opt("AMD", 592.5, "P", "20260930", -4, 4638.15, "20260925")}
-    out = only(reconcile(book, {}, {new: entry}, [
-        fill("e1", "AMD", "BOT", 4, 9.0, 2.0, 592.5, "P", "20260930", ts=100),
-        fill("e2", "AMD", "SLD", 3, 14.0, 1.5, 580, "P", "20261016", ts=160),
+        fill("e2", "AMD", "SLD", 4, 12.5, 1.6, 580, "P", "20261023", ts=160),
     ], TODAY, CFG))
     assert out.ok and not out.logs
     assert out.options[old] is None
     doc = out.options[new]
-    assert doc["startdate"] == "20260925" and doc["n"] == -3
-    assert round(doc["premium"], 2) == round(4638.15 - 3602 + 4198.5, 2)
+    assert doc["n"] == -4
+    assert doc["startdate"] == "20260925"
+    assert doc["strike"] == 580 and doc["expiry"] == "20261023"
+    assert round(doc["premium"], 2) == round(4638.15 - 3602 + 4998.4, 2)
+    assert doc["open_commission"] == round(1.85 + 2.0 + 1.6, 6)
+    price = (doc["premium"] + doc["open_commission"]) / (4 * 100)
+    assert round(price, 6) == round(6040 / 400, 6)
+
+
+def test_roll_carries_opening_commission():
+    old, _ = held("AMD", 0, 600, "P", "20261009")
+    new, entry = held("AMD", -4, 580, "P", "20261016")
+    book = {old: opt("AMD", 600, "P", "20261009", -4, 4638.15, "20260925", open_commission=1.85)}
+    out = only(reconcile(book, {}, {new: entry}, [
+        fill("e1", "AMD", "BOT", 4, 9.0, 2.0, 600, "P", "20261009", ts=100),
+        fill("e2", "AMD", "SLD", 4, 14.0, 1.5, 580, "P", "20261016", ts=160),
+    ], TODAY, CFG))
+    doc = out.options[new]
+    assert doc["n"] == -4 and doc["startdate"] == "20260925"
+    assert doc["open_commission"] == round(1.85 + 2.0 + 1.5, 6)
+    price = (doc["premium"] + doc["open_commission"]) / (4 * 100)
+    assert round(price, 6) == round(6640 / 400, 6)
+
+
+def test_count_change_is_close_and_open_not_a_roll():
+    old, _ = held("AMD", 0, 592.5, "P", "20260930")
+    new, entry = held("AMD", -3, 580, "P", "20261016")
+    book = {old: opt("AMD", 592.5, "P", "20260930", -4, 4638.15, "20260925", open_commission=1.85)}
+    out = only(reconcile(book, {}, {new: entry}, [
+        fill("e1", "AMD", "BOT", 4, 9.0, 2.0, 592.5, "P", "20260930", ts=100),
+        fill("e2", "AMD", "SLD", 3, 14.0, 1.5, 580, "P", "20261016", ts=160),
+    ], TODAY, CFG))
+    assert out.ok
+    assert out.options[old] is None
+    assert len(out.logs) == 1 and out.logs[0]["kind"] == "close"
+    assert out.logs[0]["profit"] == round(4638.15 - 3602, 2)
+    doc = out.options[new]
+    assert doc["n"] == -3 and doc["startdate"] == "20260928"
+    assert doc["strike"] == 580 and doc["expiry"] == "20261016"
+    assert round(doc["premium"], 2) == 4198.5
+    assert doc["open_commission"] == 1.5
+
+
+def test_partial_put_roll_keeps_the_rolled_count():
+    old, old_entry = held("AMD", -2, 600, "P", "20261009")
+    new, new_entry = held("AMD", -2, 580, "P", "20261023")
+    book = {old: opt("AMD", 600, "P", "20261009", -4, 4638.15, "20260925", open_commission=1.85)}
+    out = only(reconcile(book, {}, {old: old_entry, new: new_entry}, [
+        fill("e1", "AMD", "BOT", 2, 9.0, 1.0, 600, "P", "20261009", ts=100),
+        fill("e2", "AMD", "SLD", 2, 14.0, 0.8, 580, "P", "20261023", ts=160),
+    ], TODAY, CFG))
+    assert out.ok and not out.logs
+    kept = out.options[old]
+    rolled = out.options[new]
+    assert kept["n"] == -2 and kept["startdate"] == "20260925"
+    assert round(kept["premium"], 2) == round(4638.15 / 2, 2)
+    assert kept["open_commission"] == round(1.85 / 2, 6)
+    assert rolled["n"] == -2 and rolled["startdate"] == "20260925"
+    assert rolled["strike"] == 580 and rolled["expiry"] == "20261023"
+    assert round(rolled["premium"], 2) == round(4638.15 / 2 - 1801 + 2799.2, 2)
+    assert rolled["open_commission"] == round(1.85 / 2 + 1.0 + 0.8, 6)
 
 
 def test_put_close_and_call_open_are_not_a_roll():

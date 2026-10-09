@@ -69,6 +69,16 @@ class IBApi(EWrapper, EClient):
     def reqMarketDataType(self, marketDataType, **kwargs):
         return super().reqMarketDataType(marketDataType)
 
+    def reqHistoricalData(self, reqId, contract, endDateTime, durationStr, barSizeSetting,
+                          whatToShow, useRTH, formatDate, keepUpToDate, chartOptions):
+        return super().reqHistoricalData(
+            reqId, contract, endDateTime, durationStr, barSizeSetting,
+            whatToShow, useRTH, formatDate, keepUpToDate, chartOptions,
+        )
+
+    def cancelHistoricalData(self, reqId, **kwargs):
+        return super().cancelHistoricalData(reqId)
+
     def cancelAccountSummary(self, *args, **kwargs):
         reqId = kwargs.get("reqId", args[0] if args else None)
         if reqId is not None:
@@ -208,6 +218,14 @@ class IBApi(EWrapper, EClient):
 
     @auto_queue
     def marketDataType(self, reqId: int, marketDataType: int):
+        return
+
+    @auto_queue
+    def historicalData(self, reqId: int, bar):
+        return
+
+    @auto_queue
+    def historicalDataEnd(self, reqId: int, start: str, end: str):
         return
 
     @auto_queue

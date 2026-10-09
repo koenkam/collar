@@ -9,11 +9,11 @@ from ibapi.contract import Contract
 
 from config import create_c
 from .book import breakeven
-from .earnings import fetch_calendar
+from .earnings import fetch_next_earnings
 from .logbook import short_put_notional
 from .screener import (
-    candidate_strikes, day_text, dte, earnings_flag, evaluate_symbol, held_text,
-    is_session, rank, target_expiry, weekdays_through,
+    candidate_strikes, day_text, dte, earnings_due_soon, evaluate_symbol, held_text,
+    is_session, rank, target_expiry,
 )
 
 c = create_c()
@@ -67,8 +67,8 @@ class PutScan:
         self.finished_at = None
         self.version = 0
         self.closed_market = False
-        self.calendar = None
-        self.failed_days = []
+        self.earnings_dates = {}
+        self.earnings_failed = False
         self.earnings_done = False
         self.earnings_applied = False
         self.request_ids = {}
@@ -105,11 +105,7 @@ class PutScan:
             self.used_frozen = True
             self.closed_market = True
             self.controller.sendIbCommand({"method_name": "reqMarketDataType", "marketDataType": 2})
-        if self.expiry_day:
-            days = weekdays_through(self.today, self.expiry_day)
-            threading.Thread(target=self.load_earnings, args=(days,), daemon=True).start()
-        else:
-            self.earnings_done = True
+        threading.Thread(target=self.load_earnings, daemon=True).start()
         self.start_symbols()
 
     def start_symbols(self):
@@ -117,9 +113,10 @@ class PutScan:
         self.pass_no = 1
         self.next_symbol()
 
-    def load_earnings(self, days):
-        calendar, failed = fetch_calendar(days)
-        self.calendar, self.failed_days = calendar, failed
+    def load_earnings(self):
+        dates, failed = fetch_next_earnings(self.symbols, self.today)
+        self.earnings_dates = dates
+        self.earnings_failed = failed
         self.earnings_done = True
 
     def stop(self):
@@ -153,7 +150,7 @@ class PutScan:
             parts.append(f"retried {len(self.retried_symbols)} with missing data")
         if not self.earnings_done:
             parts.append("earnings still loading")
-        elif self.failed_days:
+        elif self.earnings_failed:
             parts.append("earnings check incomplete")
         return "; ".join(parts)
 
@@ -648,9 +645,10 @@ class PutScan:
             row["dte"] = dte(self.expiry, self.today) if self.expiry else None
             row["held"] = held_text(symbol, options, stocks, lambda p: breakeven({
                 "n": p.n, "avgCost": p.avgCost, "credit": getattr(p, "credit", 0.0)}))
-            row["earnings"] = None
-            if self.earnings_done and self.expiry_day:
-                row["earnings"] = earnings_flag(symbol, self.expiry_day, self.calendar or {}, self.failed_days)
+            date = (self.earnings_dates or {}).get(symbol) if self.earnings_done else None
+            row["earnings_date"] = date
+            row["earnings_unknown"] = bool(self.earnings_done and date is None and self.earnings_failed)
+            row["earnings_soon"] = earnings_due_soon(date, self.today)
             pick = row["pick"]
             if pick and available is not None:
                 row["fits"] = max(0, int(available // (pick["strike"] * 100)))
