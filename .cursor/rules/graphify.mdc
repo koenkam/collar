@@ -1,0 +1,19 @@
+---
+description: Use local graphify for code structure, callers, and impact before broad grep
+alwaysApply: true
+---
+
+## Graphify
+
+This repo has a local code graph at `graphify-out/` (scoped by `.graphifyignore`).
+
+For questions about **code structure, callers, dependencies, or impact of a change**, use graphify before broad Grep/Glob exploration:
+
+- `graphify query "<question>"` — scoped subgraph (or MCP `query_graph` on `graphify-collar`)
+- `graphify path "<A>" "<B>"` — dependency path between symbols
+- `graphify explain "<symbol>"` — one node and its neighbors
+- `graphify affected "<symbol>"` — reverse impact
+
+Use Grep/Read directly for exact strings (error messages, config keys), todo/ops notes, or once graphify has pointed at the file. If `graphify-out/graph.json` is missing or a query fails, say so and fall back to Grep.
+
+After substantive code edits in indexed paths, run `graphify update .` (AST-only, no API cost).

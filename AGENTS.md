@@ -9,7 +9,7 @@
 
 ## Item format
 
-One item per line, checkbox at column 0, stable ID, short title, optional pointer to context:
+One item per line, checkbox at column 0, stable ID, short title, and the source the item came from:
 
 ```markdown
 - [ ] T012 Short title of the task — see path/to/context.md or a one-line why
@@ -18,6 +18,7 @@ One item per line, checkbox at column 0, stable ID, short title, optional pointe
 - IDs are `T` + zero-padded number, assigned sequentially, never reused. Take the next number after the highest ID in `todo.md` and all `done_*.md`.
 - Keep lines in `todo.md` ordered by priority (top = do first). Never reword or merge an existing line; add a new item instead.
 - Sub-steps, notes and findings go indented under the item, not in other files.
+- Every new item names its source after the title (`— …`): the user request, the parent item (`follow-up to T012`), the checkup or analysis date, the log line or file, or whatever surfaced it. An item without a source cannot be judged later, so do not add one without it.
 
 ## Completing an item
 
@@ -38,3 +39,10 @@ Partial progress stays in `todo.md` with notes under the item. Do not move an it
 ## Finding new work
 
 If you find a bug, drift or risk while working on something else, add it to `todo/todo.md` as a new item (with a one-line why) and continue the current task. Do not fix it silently, and do not write findings into separate plan files.
+
+## The list shrinks
+
+- Todo lists are there to be closed, not maintained. A session must end with fewer open items in `todo/todo.md` than it started with; never more.
+- When new todos emerge from an existing task (follow-ups, sub-steps, bugs found on the way), they are part of that task: add them as items so they are tracked, then finish and close them in the same session, after the current task. Do not park them for later.
+- An item may stay open only when it genuinely cannot be done now (waiting on a live window, external data or a decision only the user can take). Write the blocker and the exact close condition under the item; the moment the blocker clears, close it.
+- Before ending a session, go through `todo/todo.md` top to bottom and close everything that can be closed. Finishing the asked-for change is not the end of the session; an emptier list is.

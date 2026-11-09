@@ -1,0 +1,9 @@
+# Keep the graph on the trading Python package.
+# Deny env, notes, prompts, and experiments.
+
+env/
+todo/
+prompts/
+experiments/
+__pycache__/
+graphify-out/

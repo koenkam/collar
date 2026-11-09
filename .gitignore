@@ -18,3 +18,8 @@ credentials.json
 *.key
 *.pem
 
+
+# Graphify (collar ignores *.json globally — keep graph artifacts trackable)
+!graphify-out/
+!graphify-out/**
+graphify-out/cache/
