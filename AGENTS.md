@@ -46,3 +46,11 @@ If you find a bug, drift or risk while working on something else, add it to `tod
 - When new todos emerge from an existing task (follow-ups, sub-steps, bugs found on the way), they are part of that task: add them as items so they are tracked, then finish and close them in the same session, after the current task. Do not park them for later.
 - An item may stay open only when it genuinely cannot be done now (waiting on a live window, external data or a decision only the user can take). Write the blocker and the exact close condition under the item; the moment the blocker clears, close it.
 - Before ending a session, go through `todo/todo_collar.md` top to bottom and close everything that can be closed. Finishing the asked-for change is not the end of the session; an emptier list is.
+
+## One-off scripts
+
+One-off scripts live in `botscripts/`. New one-off scripts go in `botscripts/`.
+
+## Code quality
+
+To maximize code quality and efficiency, always omit conversational filler and output complete, copy-pasteable code without placeholders like `// TODO` or leftover debug prints. Before writing new logic, search the codebase to prevent duplication, verify function signatures, and strictly use only existing dependencies rather than hallucinating new ones. Favor composition, pure functions, and readability over premature optimization or clever one-liners. Apply the "Fail Fast" principle using guard clauses, catch specific exceptions with descriptive errors rather than failing silently, and if a request is ambiguous or requires multi-file changes, stop to provide a brief plan or ask a clarifying question instead of guessing. Remember YAGNI and KISS. The simplest solution is the best.

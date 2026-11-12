@@ -112,7 +112,7 @@ def powerx(fulldaydata):
             day.powerx_signal = "HOLD"
     return fulldaydata
 
-fulldayfilename = "SPX_full_1day.csv"
+fulldayfilename = str(__import__("pathlib").Path(__file__).resolve().parent / "SPX_full_1day.csv")
 #read fulldayfilename into a list of simpleNamespace objects
 # each line has the format:2000-11-27,1341.77,1362.5,1341.77,1348.97
 # date, open, high, low, close

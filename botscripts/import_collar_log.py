@@ -2,12 +2,14 @@
 
 Run from the repo root:
 
-    env/bin/python -m trade.import_collar_log
+    env/bin/python botscripts/import_collar_log.py
 
 Writes summary/collar and replaces the log collection. Does not change the sheet.
 """
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from google.cloud import firestore
 
